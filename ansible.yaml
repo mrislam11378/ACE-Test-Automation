@@ -1,42 +1,37 @@
-# Usage(localhost): ansible-playbook trigger-ace-tests.yaml -i "localhost," -c local
-# Usage(remote): ansible-playbook -i hosts.ini ansible.yaml
+# Usage: ansible-playbook ansible.yaml -i "localhost," -c local
 
 - name: Run ACE test projects
   hosts: all
-  # connection: local
   vars:
-    # EDIT: Change to proper values
+    # Required - Edit these values
     broker_name: "TestNode"
     eg_name: "TestServer"
     qm_name: "MYQMGR"
-
-    # --- Directory Variables ---
-    # EDIT: Change this to the actual path where your script lives
     test_script_dir: "/home/raiyan/ansible/"
-
-    # Define the ACE profile path
     ace_profile: ". /opt/IBM/ace-12.0.12.22/server/bin/mqsiprofile"
+    
+    # File ownership
+    file_owner: "raiyan"
+    file_group: "mqbrkrs"
 
-    # EDIT: Set to a path to enable file logging, or leave empty/comment out for console logging
-    timestamp: "{{ lookup('pipe', 'date +%F_%H%M%S') }}"
-    log_dir_base: "/tmp/{{ broker_name }}_{{ eg_name }}_{{ timestamp }}"
+    # Optional - Uncomment to customize
+    log_dir_base: "/tmp/GenTestRun" # example log_dir_base: "/tmp/{{ broker_name }}_{{ eg_name }}_{{ lookup('pipe', 'date +%F_%H%M%S') }}"
+    # test_filter: "GenTest_*"
+    # test_timeout: 60
 
-    # Path variables
+    # Internal paths
     work_path: "/var/mqsi"
-    dsn_src_path:  "{{ work_path }}/registry/{{ broker_name }}/CurrentVersion/DSN"
+    dsn_src_path: "{{ work_path }}/registry/{{ broker_name }}/CurrentVersion/DSN"
     dsn_dest_path: "{{ work_path }}/components/{{ broker_name }}/servers/{{ eg_name }}/config/registry/integration_server/CurrentVersion/"
 
   tasks:
-    - name: Stop the Integration Server
+    - name: Stop Integration Server
       shell: "{{ ace_profile }} && ibmint stop server {{ eg_name }} --integration-node {{ broker_name }}"
-      # ignore_errors: yes # might not be necessary, ibmint does return error code when trying to stop on a stopped server
       register: stop_result
 
-    - name: Show Stop Output
-      debug:
-        msg: "{{ stop_result.stdout_lines }}"
+    - debug: msg="{{ stop_result.stdout_lines }}"
 
-    - name: Check if the DSN directory exists in destination
+    - name: Check if DSN directory exists
       stat:
         path: "{{ dsn_dest_path }}"
       register: dsn_check
@@ -45,34 +40,29 @@
       copy:
         src: "{{ dsn_src_path }}"
         dest: "{{ dsn_dest_path }}"
-        remote_src: yes # Because its on the server, not control host
-        owner: raiyan
-        group: mqbrkrs
+        remote_src: yes
+        owner: "{{ file_owner }}"
+        group: "{{ file_group }}"
         mode: '0775'
       when: not dsn_check.stat.exists
 
-    - name: Run all tests via script
+    - name: Run tests
       shell: >
         {{ ace_profile }} &&
-        ./run_all_tests.sh
-        {{ broker_name }}
-        {{ eg_name }}
-        {{ qm_name }}
-        {{ '--log-base ' + log_dir_base if log_dir_base | default('') else '' }}
+        ./run_all_tests.sh {{ broker_name }} {{ eg_name }} {{ qm_name }}
+        {{ '--log-base ' + log_dir_base if log_dir_base is defined else '' }}
+        {{ '--test-filter ' + test_filter if test_filter is defined else '' }}
+        {{ '--timeout ' + (test_timeout | string) if test_timeout is defined else '' }}
       args:
-        chdir: "{{ test_script_dir }}"  # cd into script location
+        chdir: "{{ test_script_dir }}"
       register: test_results
       ignore_errors: yes
-      no_log: true # Omits the output from the console as it gets printed in the next task
+      no_log: true
 
-    - name: Print test summary output
-      debug:
-        msg: "{{ test_results.stdout_lines }}"
+    - debug: msg="{{ test_results.stdout_lines }}"
 
-    - name: Start the Integration Server
+    - name: Start Integration Server
       shell: "{{ ace_profile }} && ibmint start server {{ eg_name }} --integration-node {{ broker_name }}"
       register: start_result
 
-    - name: Show Start Output
-      debug:
-        msg: "{{ start_result.stdout_lines }}"
+    - debug: msg="{{ start_result.stdout_lines }}"

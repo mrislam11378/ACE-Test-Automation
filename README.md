@@ -1,59 +1,119 @@
 # IBM ACE Test Automation
 
-Automated testing framework for IBM App Connect Enterprise (ACE) using Ansible and shell scripts.
-
-## Files
-
-- **ansible.yaml** - Ansible playbook that orchestrates ACE test execution
-- **run_all_tests.sh** - Shell script that runs all test projects and generates summary reports
-- **hosts.ini** - Inventory file for remote execution
+Automated testing framework for IBM App Connect Enterprise (ACE).
 
 ## Quick Start
 
 ```bash
-# Run with Ansible (localhost)
-ansible-playbook ansible.yaml -i "localhost," -c local
+# Basic usage
+./run_all_tests.sh <BrokerName> <ExecutionGroupName> <QueueManagerName>
 
-# Run with Ansible (remote servers)
-ansible-playbook -i hosts.ini ansible.yaml
-
-# Run script directly (console mode - default)
-./run_all_tests.sh TestNode TestServer MYQMGR
-
-# Run script directly (file logging mode)
-./run_all_tests.sh TestNode TestServer MYQMGR --log-base /tmp/logs
+# With options
+./run_all_tests.sh MyBroker MyEG MyQM --log-base /tmp/logs --test-filter "GenTest_*" --timeout 60
 ```
 
-## Configuration
+## Options
 
-Edit `ansible.yaml` variables:
-- `broker_name` - ACE Integration Node name
-- `eg_name` - Integration Server name
-- `qm_name` - MQ Queue Manager name
-- `test_script_dir` - Directory where run_all_tests.sh is located
-- `ace_profile` - Path to ACE profile script
-- `log_dir_base` - Base directory for test logs (enables file logging mode)
-  - If set: Logs written to `/tmp/<broker>_<server>_<timestamp>/`
-  - If empty/commented: Console mode (no log files, summary only)
+| Parameter | Required | Default | Description |
+|-----------|----------|---------|-------------|
+| BrokerName | Yes | - | ACE Integration Node name |
+| ExecutionGroupName | Yes | - | Integration Server name |
+| QueueManagerName | Yes | - | MQ Queue Manager name |
+| --log-base | No | console | Directory for log files |
+| --test-filter | No | GenTest_* | Pattern to filter test projects |
+| --timeout | No | 60 | Timeout per test in seconds |
 
 ## Features
 
-- Stops/starts Integration Server automatically
-- Copies DSN configuration if missing
-- Runs all `GenTest_*` projects sequentially
-- Generates CSV summary report with test metrics
-- Two logging modes:
-  - **Console mode** (default): Output to console, summary in `/tmp/ace_test_summary_75975.csv`
-  - **File mode**: Individual test logs + summary in specified directory
+- ✅ Parameter validation with usage help
+- ✅ Test filtering by pattern
+- ✅ Configurable timeout (prevents hanging)
+- ✅ Progress indicator (e.g., "Test 3/10")
+- ✅ Console or file logging
+- ✅ Log appending (tracks test history)
+- ✅ Timestamped CSV summaries
+- ✅ Proper exit codes (0=success, 1=error)
 
 ## Output
 
-### Console Mode (default)
-- Test output displayed in console
-- Summary report: `/tmp/ace_test_summary_75975.csv`
+**Summary File:** `summary_<broker>_<eg>_<timestamp>.csv`
 
-### File Mode (when `log_dir_base` is set)
-Results saved to `/tmp/<broker>_<server>_<timestamp>/`:
-- Individual test logs: `<project_name>.log`
-- Summary report: `summary.csv`
-- Timestamp format: `YYYY-MM-DD_HHMMSS`
+| Status | Meaning |
+|--------|---------|
+| PASS | All tests passed |
+| FAIL | Some tests failed/aborted |
+| TIMEOUT | Test exceeded timeout |
+| ERROR | Execution error |
+
+**Example:**
+```csv
+Test Project,Status,Passed,Failed,Aborted,Time(s),Log File
+GenTest_Project1,PASS,10,0,0,5.23,/tmp/logs/GenTest_Project1.log
+GenTest_Project2,FAIL,8,2,0,4.56,/tmp/logs/GenTest_Project2.log
+```
+
+## Examples
+
+```bash
+# Console output only
+./run_all_tests.sh MyBroker MyEG MyQM
+
+# Save logs to files
+./run_all_tests.sh MyBroker MyEG MyQM --log-base /tmp/logs
+
+# Filter specific tests
+./run_all_tests.sh MyBroker MyEG MyQM --test-filter "GenTest_Payment*"
+
+# Custom timeout
+./run_all_tests.sh MyBroker MyEG MyQM --timeout 300
+
+# All options
+./run_all_tests.sh MyBroker MyEG MyQM --log-base /tmp/logs --test-filter "GenTest_*" --timeout 120
+```
+
+## Exit Codes
+
+- **0** = Tests ran successfully (check CSV for pass/fail)
+- **1** = Execution error (validation, timeout, or system error)
+
+## Ansible Usage
+
+### Configuration
+
+Edit `ansible.yaml` variables:
+
+**Required:**
+```yaml
+broker_name: "TestNode"          # ACE broker name
+eg_name: "TestServer"            # Integration server name
+qm_name: "MYQMGR"                # Queue manager name
+test_script_dir: "/path/to/dir"  # Script directory
+ace_profile: ". /path/to/mqsiprofile"  # ACE profile
+file_owner: "username"           # File ownership user
+file_group: "groupname"          # File ownership group
+```
+
+**Optional:**
+```yaml
+log_dir_base: "/tmp/GenTestRun"  # Log directory (default)
+test_filter: "GenTest_*"         # Test pattern filter
+test_timeout: 60                 # Timeout per test (seconds)
+```
+
+### Run Playbook
+
+```bash
+# Localhost
+ansible-playbook ansible.yaml -i "localhost," -c local
+
+# Remote servers (edit hosts.ini first)
+ansible-playbook -i hosts.ini ansible.yaml
+```
+
+### What It Does
+
+1. Stops Integration Server
+2. Copies DSN directory if missing
+3. Runs all tests via `run_all_tests.sh`
+4. Starts Integration Server
+5. Displays test summary
