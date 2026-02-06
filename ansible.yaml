@@ -1,0 +1,78 @@
+# Usage(localhost): ansible-playbook trigger-ace-tests.yaml -i "localhost," -c local
+# Usage(remote): ansible-playbook -i hosts.ini ansible.yaml
+
+- name: Run ACE test projects
+  hosts: all
+  # connection: local
+  vars:
+    # EDIT: Change to proper values
+    broker_name: "TestNode"
+    eg_name: "TestServer"
+    qm_name: "MYQMGR"
+
+    # --- Directory Variables ---
+    # EDIT: Change this to the actual path where your script lives
+    test_script_dir: "/home/raiyan/ansible/"
+
+    # Define the ACE profile path
+    ace_profile: ". /opt/IBM/ace-12.0.12.22/server/bin/mqsiprofile"
+
+    # EDIT: Set to a path to enable file logging, or leave empty/comment out for console logging
+    timestamp: "{{ lookup('pipe', 'date +%F_%H%M%S') }}"
+    log_dir_base: "/tmp/{{ broker_name }}_{{ eg_name }}_{{ timestamp }}"
+
+    # Path variables
+    work_path: "/var/mqsi"
+    dsn_src_path:  "{{ work_path }}/registry/{{ broker_name }}/CurrentVersion/DSN"
+    dsn_dest_path: "{{ work_path }}/components/{{ broker_name }}/servers/{{ eg_name }}/config/registry/integration_server/CurrentVersion/"
+
+  tasks:
+    - name: Stop the Integration Server
+      shell: "{{ ace_profile }} && ibmint stop server {{ eg_name }} --integration-node {{ broker_name }}"
+      # ignore_errors: yes # might not be necessary, ibmint does return error code when trying to stop on a stopped server
+      register: stop_result
+
+    - name: Show Stop Output
+      debug:
+        msg: "{{ stop_result.stdout_lines }}"
+
+    - name: Check if the DSN directory exists in destination
+      stat:
+        path: "{{ dsn_dest_path }}"
+      register: dsn_check
+
+    - name: Copy DSN directory if missing
+      copy:
+        src: "{{ dsn_src_path }}"
+        dest: "{{ dsn_dest_path }}"
+        remote_src: yes # Because its on the server, not control host
+        owner: raiyan
+        group: mqbrkrs
+        mode: '0775'
+      when: not dsn_check.stat.exists
+
+    - name: Run all tests via script
+      shell: >
+        {{ ace_profile }} &&
+        ./run_all_tests.sh
+        {{ broker_name }}
+        {{ eg_name }}
+        {{ qm_name }}
+        {{ '--log-base ' + log_dir_base if log_dir_base | default('') else '' }}
+      args:
+        chdir: "{{ test_script_dir }}"  # cd into script location
+      register: test_results
+      ignore_errors: yes
+      no_log: true # Omits the output from the console as it gets printed in the next task
+
+    - name: Print test summary output
+      debug:
+        msg: "{{ test_results.stdout_lines }}"
+
+    - name: Start the Integration Server
+      shell: "{{ ace_profile }} && ibmint start server {{ eg_name }} --integration-node {{ broker_name }}"
+      register: start_result
+
+    - name: Show Start Output
+      debug:
+        msg: "{{ start_result.stdout_lines }}"
