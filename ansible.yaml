@@ -17,7 +17,7 @@
     # Optional - Uncomment to customize
     log_dir_base: "/tmp/GenTestRun" # example log_dir_base: "/tmp/{{ broker_name }}_{{ eg_name }}_{{ lookup('pipe', 'date +%F_%H%M%S') }}"
     # test_filter: "GenTest_*"
-    # test_timeout: 60
+    # delete_dsn_before_start: true  # WARNING: Deletes DSN directory before starting server
 
     # Internal paths
     work_path: "/var/mqsi"
@@ -28,23 +28,18 @@
     - name: Stop Integration Server
       shell: "{{ ace_profile }} && ibmint stop server {{ eg_name }} --integration-node {{ broker_name }}"
       register: stop_result
+      failed_when: stop_result.rc != 0
 
     - debug: msg="{{ stop_result.stdout_lines }}"
 
-    - name: Check if DSN directory exists
-      stat:
-        path: "{{ dsn_dest_path }}"
-      register: dsn_check
+    - name: Check for DSN directory differences
+      # -n is dry run, -v is verbose, -r is recursive, -c is checksum
+      shell: "rsync -rcvn --delete {{ dsn_src_path }}/ {{ dsn_dest_path }}/DSN  || echo 'No differences found'"
+      register: dsn_diff
+      changed_when: false
 
-    - name: Copy DSN directory if missing
-      copy:
-        src: "{{ dsn_src_path }}"
-        dest: "{{ dsn_dest_path }}"
-        remote_src: yes
-        owner: "{{ file_owner }}"
-        group: "{{ file_group }}"
-        mode: '0775'
-      when: not dsn_check.stat.exists
+    - debug:
+        msg: "{{ dsn_diff.stdout_lines }}"
 
     - name: Run tests
       shell: >
@@ -52,7 +47,6 @@
         ./run_all_tests.sh {{ broker_name }} {{ eg_name }} {{ qm_name }}
         {{ '--log-base ' + log_dir_base if log_dir_base is defined else '' }}
         {{ '--test-filter ' + test_filter if test_filter is defined else '' }}
-        {{ '--timeout ' + (test_timeout | string) if test_timeout is defined else '' }}
       args:
         chdir: "{{ test_script_dir }}"
       register: test_results
@@ -60,6 +54,12 @@
       no_log: true
 
     - debug: msg="{{ test_results.stdout_lines }}"
+
+    - name: Delete DSN directory (optional cleanup)
+      file:
+        path: "{{ dsn_dest_path }}"
+        state: absent
+      when: delete_dsn_before_start | default(false) | bool
 
     - name: Start Integration Server
       shell: "{{ ace_profile }} && ibmint start server {{ eg_name }} --integration-node {{ broker_name }}"

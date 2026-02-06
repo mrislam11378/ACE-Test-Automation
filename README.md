@@ -9,7 +9,7 @@ Automated testing framework for IBM App Connect Enterprise (ACE).
 ./run_all_tests.sh <BrokerName> <ExecutionGroupName> <QueueManagerName>
 
 # With options
-./run_all_tests.sh MyBroker MyEG MyQM --log-base /tmp/logs --test-filter "GenTest_*" --timeout 60
+./run_all_tests.sh MyBroker MyEG MyQM --log-base /tmp/logs --test-filter "GenTest_*"
 ```
 
 ## Options
@@ -21,14 +21,11 @@ Automated testing framework for IBM App Connect Enterprise (ACE).
 | QueueManagerName | Yes | - | MQ Queue Manager name |
 | --log-base | No | console | Directory for log files |
 | --test-filter | No | GenTest_* | Pattern to filter test projects |
-| --timeout | No | 60 | Timeout per test in seconds |
 
 ## Features
 
 - ✅ Parameter validation with usage help
 - ✅ Test filtering by pattern
-- ✅ Configurable timeout (prevents hanging)
-- ✅ Progress indicator (e.g., "Test 3/10")
 - ✅ Console or file logging
 - ✅ Log appending (tracks test history)
 - ✅ Timestamped CSV summaries
@@ -42,8 +39,7 @@ Automated testing framework for IBM App Connect Enterprise (ACE).
 |--------|---------|
 | PASS | All tests passed |
 | FAIL | Some tests failed/aborted |
-| TIMEOUT | Test exceeded timeout |
-| ERROR | Execution error |
+| ERROR | Execution error (no test output) |
 
 **Example:**
 ```csv
@@ -64,17 +60,14 @@ GenTest_Project2,FAIL,8,2,0,4.56,/tmp/logs/GenTest_Project2.log
 # Filter specific tests
 ./run_all_tests.sh MyBroker MyEG MyQM --test-filter "GenTest_Payment*"
 
-# Custom timeout
-./run_all_tests.sh MyBroker MyEG MyQM --timeout 300
-
 # All options
-./run_all_tests.sh MyBroker MyEG MyQM --log-base /tmp/logs --test-filter "GenTest_*" --timeout 120
+./run_all_tests.sh MyBroker MyEG MyQM --log-base /tmp/logs --test-filter "GenTest_*"
 ```
 
 ## Exit Codes
 
 - **0** = Tests ran successfully (check CSV for pass/fail)
-- **1** = Execution error (validation, timeout, or system error)
+- **1** = Execution error (validation or system error)
 
 ## Ansible Usage
 
@@ -95,9 +88,10 @@ file_group: "groupname"          # File ownership group
 
 **Optional:**
 ```yaml
-log_dir_base: "/tmp/GenTestRun"  # Log directory (default)
-test_filter: "GenTest_*"         # Test pattern filter
-test_timeout: 60                 # Timeout per test (seconds)
+log_dir_base: "/tmp/GenTestRun"          # Log directory (default)
+test_filter: "GenTest_*"                 # Test pattern filter
+delete_dsn_before_start: true            # Delete DSN before server start (WARNING)
+mqsi_work_path: "/var/mqsi"              # Custom MQSI_WORKPATH if different
 ```
 
 ### Run Playbook
@@ -112,8 +106,13 @@ ansible-playbook -i hosts.ini ansible.yaml
 
 ### What It Does
 
-1. Stops Integration Server
-2. Copies DSN directory if missing
+1. Stops Integration Server (fails if can't stop)
+2. Checks DSN directory differences (dry-run, no copy)
 3. Runs all tests via `run_all_tests.sh`
-4. Starts Integration Server
-5. Displays test summary
+4. Optionally deletes DSN directory (if enabled)
+5. Starts Integration Server
+6. Displays test summary
+
+### DSN Directory Check
+
+The playbook uses `rsync` in dry-run mode with checksum comparison to detect differences between source and destination DSN directories. It reports what files differ but does not copy them.
