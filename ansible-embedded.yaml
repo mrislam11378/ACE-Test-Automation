@@ -139,17 +139,6 @@
           echo "${PROJECT_NAME},${STATUS},${PASSED},${FAILED},${ABORTED},${TIME},${LOG_FILE}" >> "{{ summary_file_path }}"
         done
         
-        # # Display summary
-        # echo
-        # echo "-------------------------------------------------------"
-        # echo "TEST SUMMARY"
-        # echo "-------------------------------------------------------"
-        # awk -F, '{printf "%-35s %-8s %-8s %-8s %-8s %-10s %s\n", $1,$2,$3,$4,$5,$6,$7}
-        #          NR==1 {print "---------------------------------------------------------------------------------------------------"}' "{{ summary_file_path }}"
-        # echo "-------------------------------------------------------"
-        # echo "Full logs are available under: {{ log_dir_base }}"
-        # echo "-------------------------------------------------------"
-        
         exit $EXECUTION_ERROR
       register: test_results
       ignore_errors: yes

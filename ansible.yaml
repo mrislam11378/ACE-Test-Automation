@@ -8,21 +8,34 @@
     eg_name: "TestServer"
     qm_name: "MYQMGR"
     test_script_dir: "/home/raiyan/ansible/"
-    ace_profile: ". /opt/IBM/ace-12.0.12.22/server/bin/mqsiprofile"
+    ace_version: "12.0.12.22"
+    ace_profile_path: "/opt/IBM/ace-{{ ace_version }}/server/bin/mqsiprofile"
+    ace_profile: "[ -f ~/.bash_profile ] && . ~/.bash_profile || . {{ ace_profile_path }}"
     
     # File ownership
     file_owner: "raiyan"
     file_group: "mqbrkrs"
 
-    # Optional - Uncomment to customize
-    log_dir_base: "/tmp/GenTestRun" # example log_dir_base: "/tmp/{{ broker_name }}_{{ eg_name }}_{{ lookup('pipe', 'date +%F_%H%M%S') }}"
-    # test_filter: "GenTest_*"
+    # Log Directory
+    log_dir_base: "/tmp/GenTestRun"
     # delete_dsn_before_start: true  # WARNING: Deletes DSN directory before starting server
 
-    # Internal paths
-    work_path: "/var/mqsi"
-    dsn_src_path: "{{ work_path }}/registry/{{ broker_name }}/CurrentVersion/DSN"
-    dsn_dest_path: "{{ work_path }}/components/{{ broker_name }}/servers/{{ eg_name }}/config/registry/integration_server/CurrentVersion/"
+    # Internal paths - Do not modify unless necessary
+    mqsi_workpath: "/var/mqsi"
+    server_dir: "{{ mqsi_workpath }}/components/{{ broker_name }}/servers/{{ eg_name }}"
+    run_dir: "{{ server_dir }}/run"
+    dsn_src_path: "{{ mqsi_workpath }}/registry/{{ broker_name }}/CurrentVersion/DSN"
+    dsn_dest_path: "{{ server_dir }}/config/registry/integration_server/CurrentVersion/DSN"
+  
+  pre_tasks:
+    - name: Generate timestamp for this run
+      set_fact:
+        run_timestamp: "{{ lookup('pipe', 'date +%Y%m%d_%H%M%S') }}"
+        
+    - name: Set summary file paths
+      set_fact:
+        summary_file_name: "summary_{{ broker_name }}_{{ eg_name }}_{{ run_timestamp }}.csv"
+        summary_file_path: "{{ log_dir_base }}/summary_{{ broker_name }}_{{ eg_name }}_{{ run_timestamp }}.csv"
 
   tasks:
     - name: Stop Integration Server
@@ -34,7 +47,7 @@
 
     - name: Check for DSN directory differences
       # -n is dry run, -v is verbose, -r is recursive, -c is checksum
-      shell: "rsync -rcvn --delete {{ dsn_src_path }}/{{ dsn_dest_path }}/DSN  || echo 'No differences found'"
+      shell: "rsync -rcvn --delete {{ dsn_src_path }}/ {{ dsn_dest_path }}/  || echo 'No differences found'"
       register: dsn_diff
       changed_when: false
 
@@ -44,9 +57,7 @@
     - name: Run tests
       shell: >
         {{ ace_profile }} &&
-        ./run_all_tests.sh {{ broker_name }} {{ eg_name }} {{ qm_name }}
-        {{ '--log-base ' + log_dir_base if log_dir_base is defined else '' }}
-        {{ '--test-filter ' + test_filter if test_filter is defined else '' }}
+        ./run_all_tests.sh {{ broker_name }} {{ eg_name }} {{ qm_name }} --log-base {{ log_dir_base }}
       args:
         chdir: "{{ test_script_dir }}"
       register: test_results
@@ -67,13 +78,16 @@
 
     - debug: msg="{{ start_result.stdout_lines }}"
 
-    - name: Display test summary after server start
-      shell: >
-        SUMMARY_FILE=$(echo '{{ test_results.stdout }}' | grep 'SUMMARY_FILE_PATH=' | cut -d'=' -f2) &&
-        [ -n "$SUMMARY_FILE" ] && [ -f "$SUMMARY_FILE" ] && cat "$SUMMARY_FILE" || true
+    - name: Display test summary table
+      shell: |
+        echo "\nTEST SUMMARY"
+        echo "================================================================================="
+        awk -F, 'BEGIN {printf "%-35s %-10s %-8s %-8s %-8s %-8s\n", "Project", "Status", "Pass", "Fail", "Abort", "Time" }
+             NR>1 {printf "%-35s %-10s %-8s %-8s %-8s %-8s\n", $1, $2, $3, $4, $5, $6}' {{ summary_file_path }}
+        echo "================================================================================="
       register: summary_content
       ignore_errors: yes
 
     - debug: msg="{{ summary_content.stdout_lines }}"
-      when: summary_content.stdout != ""
+      when: summary_content.rc == 0
 

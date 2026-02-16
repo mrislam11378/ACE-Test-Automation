@@ -1,19 +1,15 @@
 #!/bin/bash
-# Usage: ./run_all_tests.sh <BrokerName> <ExecutionGroupName> <QueueManagerName> [--log-base <path>] [--test-filter <pattern>]
+# Usage: ./run_all_tests.sh <BrokerName> <ExecutionGroupName> <QueueManagerName> --log-base <path>
 
 # Function to display usage
 usage() {
-    echo "Usage: $0 <BrokerName> <ExecutionGroupName> <QueueManagerName> [OPTIONS]"
+    echo "Usage: $0 <BrokerName> <ExecutionGroupName> <QueueManagerName> --log-base <path>"
     echo ""
     echo "Required parameters:"
     echo "  BrokerName             - Name of the broker"
     echo "  ExecutionGroupName     - Name of the execution group"
     echo "  QueueManagerName       - Name of the queue manager"
-    echo ""
-    echo "Optional parameters:"
-    echo "  --log-base <path>      - Base directory for log files (default: console output)"
-    echo "  --test-filter <pattern> - Filter test projects by pattern (default: all test projects)"
-    echo "                           Examples: 'GenTest_MyApp*', 'GenTest_Specific', '*Integration*'"
+    echo "  --log-base <path>      - Base directory for log files"
     exit 1
 }
 
@@ -32,7 +28,6 @@ parse_arguments() {
 
     # Default values
     LOG_BASE=""
-    TEST_FILTER=""
 
     # Parse optional flags
     shift 3
@@ -42,16 +37,19 @@ parse_arguments() {
                 LOG_BASE="$2"
                 shift 2
                 ;;
-            --test-filter)
-                TEST_FILTER="$2"
-                shift 2
-                ;;
             *)
                 echo "Unknown option: $1"
                 exit 1
                 ;;
         esac
     done
+    
+    # Validate log-base is provided
+    if [ -z "$LOG_BASE" ]; then
+        echo "Error: --log-base is required"
+        echo ""
+        usage
+    fi
 }
 
 # Function to setup and validate environment
@@ -67,12 +65,8 @@ setup_environment() {
 
     # Setup summary file path
     TIMESTAMP=$(date +%Y%m%d_%H%M%S)
-    if [ -z "$LOG_BASE" ]; then
-        SUMMARY_FILE="/tmp/summary_${BROKER_NAME}_${EG_NAME}_${TIMESTAMP}.csv"
-    else
-        mkdir -p "$LOG_BASE"
-        SUMMARY_FILE="${LOG_BASE}/summary_${BROKER_NAME}_${EG_NAME}_${TIMESTAMP}.csv"
-    fi
+    mkdir -p "$LOG_BASE"
+    SUMMARY_FILE="${LOG_BASE}/summary_${BROKER_NAME}_${EG_NAME}_${TIMESTAMP}.csv"
 
     # Initialize summary file and display configuration
     echo "Test Project,Status,Passed,Failed,Aborted,Time(s),Log File" > "$SUMMARY_FILE"
@@ -82,19 +76,14 @@ setup_environment() {
     echo " Broker          : $BROKER_NAME"
     echo " Execution Group : $EG_NAME"
     echo " Queue Manager   : $QM_NAME"
-    echo " Test Filter     : $TEST_FILTER"
-    [ -n "$LOG_BASE" ] && echo " Log Directory   : $LOG_BASE"
+    echo " Log Directory   : $LOG_BASE"
     echo " Summary File    : $SUMMARY_FILE"
     echo "-------------------------------------------------------"
 }
 
 # Function to find test projects
 find_test_projects() {
-    if [ -n "$TEST_FILTER" ]; then
-        TEST_PROJECTS=$(find "$RUN_DIR" -maxdepth 1 -type d -name "$TEST_FILTER" | sort)
-    else
-        TEST_PROJECTS=$(find "$RUN_DIR" -maxdepth 2 -name "testproject.descriptor" -exec dirname {} \; | sort)
-    fi
+    TEST_PROJECTS=$(find "$RUN_DIR" -maxdepth 2 -name "testproject.descriptor" -exec dirname {} \; | sort)
 }
 
 # Function to run a single test
@@ -106,29 +95,22 @@ run_test() {
 
     echo "-------------------------------------------------------"
     echo "Running test: $project_name"
+    echo "Command: $cmd"
     echo "-------------------------------------------------------"
+    echo "Writing output to: $log_file"
 
-    # Run command
+    # Run command and log
     local output
-    if [ -z "$LOG_BASE" ]; then
-        # Console mode
+    {
+        echo ""
+        echo "-------------------------------------------------------"
+        echo "Test: $project_name"
         echo "Command: $cmd"
+        echo "Started at: $(date)"
+        echo "-------------------------------------------------------"
         output=$(eval "$cmd" 2>&1)
-        local cmd_exit=$?
         echo "$output"
-    else
-        # File mode - always append
-        echo "Writing output to: $log_file"
-        echo "" >> "$log_file"
-        echo "-------------------------------------------------------" >> "$log_file"
-        echo "Test: $project_name" >> "$log_file"
-        echo "Command: $cmd" >> "$log_file"
-        echo "Started at: $(date)" >> "$log_file"
-        echo "-------------------------------------------------------" >> "$log_file"
-        output=$(eval "$cmd" 2>&1)
-        local cmd_exit=$?
-        echo "$output" >> "$log_file"
-    fi
+    } >> "$log_file"
 
     # Return output for parsing
     echo "$output"
@@ -168,18 +150,11 @@ process_test_results() {
 # Function to display test summary
 display_test_summary() {
     echo
-    echo "-------------------------------------------------------"
     echo "TEST SUMMARY"
-    echo "-------------------------------------------------------"
-    # Display summary table (7 columns: Test Project, Status, Passed, Failed, Aborted, Time, Log File)
-    awk -F, '{printf "%-35s %-8s %-8s %-8s %-8s %-10s %s\n", $1,$2,$3,$4,$5,$6,$7}
-             NR==1 {print "---------------------------------------------------------------------------------------------------"}' "$SUMMARY_FILE"
-    echo "-------------------------------------------------------"
-    if [ -n "$LOG_BASE" ]; then
-        echo "Full logs are available under: $LOG_BASE"
-        echo "-------------------------------------------------------"
-    fi
-    echo "SUMMARY_FILE_PATH=${SUMMARY_FILE}"
+    echo "================================================================================="
+    awk -F, 'BEGIN {printf "%-35s %-10s %-8s %-8s %-8s %-8s\n", "Project", "Status", "Pass", "Fail", "Abort", "Time" }
+         NR>1 {printf "%-35s %-10s %-8s %-8s %-8s %-8s\n", $1, $2, $3, $4, $5, $6}' "$SUMMARY_FILE"
+    echo "================================================================================="
 }
 
 # -----------------------------
