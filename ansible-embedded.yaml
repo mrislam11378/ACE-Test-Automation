@@ -1,0 +1,184 @@
+# Usage: ansible-playbook ansible.yaml -i "localhost," -c local
+
+- name: Run ACE test projects
+  hosts: all
+  vars:
+    # Required - Edit these values
+    broker_name: "TestNode"
+    eg_name: "TestServer"
+    qm_name: "MYQMGR"
+    test_script_dir: "/home/raiyan/ansible/"
+    ace_version: "12.0.12.22"
+    ace_profile_path: "/opt/IBM/ace-{{ ace_version }}/server/bin/mqsiprofile"
+    ace_profile: "[ -f ~/.bash_profile ] && . ~/.bash_profile || . {{ ace_profile_path }}"
+    
+    # File ownership
+    file_owner: "raiyan"
+    file_group: "mqbrkrs"
+
+    # Log Directory (Static path as requested)
+    log_dir_base: "/tmp/GenTestRun"
+    # delete_dsn_before_start: true  # WARNING: Deletes DSN directory before starting server
+
+    # Internal paths - Do not modify unless necessary
+    mqsi_workpath: "/var/mqsi"
+    server_dir: "{{ mqsi_workpath }}/components/{{ broker_name }}/servers/{{ eg_name }}"
+    run_dir: "{{ server_dir }}/run"
+    dsn_src_path: "{{ mqsi_workpath }}/registry/{{ broker_name }}/CurrentVersion/DSN"
+    dsn_dest_path: "{{ server_dir }}/config/registry/integration_server/CurrentVersion/DSN"
+  
+  pre_tasks:
+    - name: Generate timestamp for this run
+      set_fact:
+        run_timestamp: "{{ lookup('pipe', 'date +%Y%m%d_%H%M%S') }}"
+        
+    - name: Set summary file paths
+      set_fact:
+        summary_file_name: "summary_{{ broker_name }}_{{ eg_name }}_{{ run_timestamp }}.csv"
+        summary_file_path: "{{ log_dir_base }}/summary_{{ broker_name }}_{{ eg_name }}_{{ run_timestamp }}.csv"
+
+  tasks:
+    - name: Stop Integration Server
+      shell: "{{ ace_profile }} && ibmint stop server {{ eg_name }} --integration-node {{ broker_name }}"
+      register: stop_result
+      failed_when: stop_result.rc != 0
+
+    - debug: msg="{{ stop_result.stdout_lines }}"
+
+    - name: Check for DSN directory differences
+      # -n is dry run, -v is verbose, -r is recursive, -c is checksum
+      shell: "rsync -rcvn --delete {{ dsn_src_path }}/ {{ dsn_dest_path }}/  || echo 'No differences found'"
+      register: dsn_diff
+      changed_when: false
+
+    - debug:
+        msg: "{{ dsn_diff.stdout_lines }}"
+
+    - name: Setup test environment
+      shell: |
+        {{ ace_profile }}
+        
+        # Validate directories
+        [ ! -d "{{ server_dir }}" ] && { echo "Error: Server directory not found: {{ server_dir }}"; exit 1; }
+        [ ! -d "{{ run_dir }}" ] && { echo "Error: Run directory not found: {{ run_dir }}"; exit 1; }
+        
+        # Setup summary file
+        mkdir -p "{{ log_dir_base }}"
+        echo "Test Project,Status,Passed,Failed,Aborted,Time(s),Log File" > "{{ summary_file_path }}"
+        
+        # Display configuration
+        echo "-------------------------------------------------------"
+        echo "Running tests for:"
+        echo " Broker          : {{ broker_name }}"
+        echo " Execution Group : {{ eg_name }}"
+        echo " Queue Manager   : {{ qm_name }}"
+        echo " Log Directory   : {{ log_dir_base }}"
+        echo " Summary File    : {{ summary_file_path }}"
+        echo "-------------------------------------------------------"
+      register: setup_result
+
+    - debug: msg="{{ setup_result.stdout_lines }}"
+
+    - name: Run all tests
+      shell: |
+        {{ ace_profile }}
+        
+        EXECUTION_ERROR=0
+        
+        # Find test projects
+        # TEST_PROJECTS=$(find {{ run_dir }} \( -path "{{ run_dir }}/*/*/*" -prune \) -o -name "testproject.descriptor" -exec dirname {} \; | sort)
+        TEST_PROJECTS=$(find {{ run_dir }} \( -path "{{ run_dir }}/*/*/*" -prune \) -o -name "testproject.descriptor" -print | xargs -I {} dirname {} | sort)
+
+        [ -z "$TEST_PROJECTS" ] && { echo "No test projects found."; exit 0; }
+
+        # Run each test
+        for TEST_PROJECT in $TEST_PROJECTS; do
+          [ ! -d "$TEST_PROJECT" ] || [ ! -f "$TEST_PROJECT/testproject.descriptor" ] && continue
+          
+          PROJECT_NAME=$(basename "$TEST_PROJECT")
+          LOG_FILE="{{ log_dir_base }}/${PROJECT_NAME}.log"
+          
+          echo "-------------------------------------------------------"
+          echo "Running test: $PROJECT_NAME"
+          echo "Command: IntegrationServer --work-dir {{ server_dir }} --no-nodejs --start-msgflows false --mq-queue-manager-name {{ qm_name }} --test-project ${PROJECT_NAME}"
+          echo "-------------------------------------------------------"
+          echo "Writing output to: $LOG_FILE"
+          
+          # Run test and log
+          {
+            echo ""
+            echo "-------------------------------------------------------"
+            echo "Test: $PROJECT_NAME"
+            echo "Command: IntegrationServer --work-dir {{ server_dir }} --no-nodejs --start-msgflows false --mq-queue-manager-name {{ qm_name }} --test-project ${PROJECT_NAME}"
+            echo "Started at: $(date)"
+            echo "-------------------------------------------------------"
+            OUTPUT=$(IntegrationServer --work-dir "{{ server_dir }}" --no-nodejs --start-msgflows false --mq-queue-manager-name "{{ qm_name }}" --test-project "${PROJECT_NAME}" 2>&1)
+            echo "$OUTPUT"
+          } >> "$LOG_FILE"
+          
+          # Extract metrics and determine status
+          PASSED=$(echo "$OUTPUT" | grep 'PASSED' | grep ':' | sed 's/.*://;s/[^0-9]//g' | tail -1)
+          FAILED=$(echo "$OUTPUT" | grep 'FAILED' | grep ':' | sed 's/.*://;s/[^0-9]//g' | tail -1)
+          ABORTED=$(echo "$OUTPUT" | grep 'ABORTED' | grep ':' | sed 's/.*://;s/[^0-9]//g' | tail -1)
+          TIME=$(echo "$OUTPUT" | grep 'TIME(secs)' | grep ':' | sed 's/.*://;s/[^0-9.]//g' | tail -1)
+          
+          PASSED=${PASSED:-0}
+          FAILED=${FAILED:-0}
+          ABORTED=${ABORTED:-0}
+          TIME=${TIME:-0}
+          
+          if [ "$PASSED" = "0" ] && [ "$FAILED" = "0" ]; then
+            STATUS="ERROR"
+            EXECUTION_ERROR=1
+          elif [ "$FAILED" -gt 0 ] || [ "$ABORTED" -gt 0 ]; then
+            STATUS="FAIL"
+          else
+            STATUS="PASS"
+          fi
+          
+          echo "${PROJECT_NAME},${STATUS},${PASSED},${FAILED},${ABORTED},${TIME},${LOG_FILE}" >> "{{ summary_file_path }}"
+        done
+        
+        # # Display summary
+        # echo
+        # echo "-------------------------------------------------------"
+        # echo "TEST SUMMARY"
+        # echo "-------------------------------------------------------"
+        # awk -F, '{printf "%-35s %-8s %-8s %-8s %-8s %-10s %s\n", $1,$2,$3,$4,$5,$6,$7}
+        #          NR==1 {print "---------------------------------------------------------------------------------------------------"}' "{{ summary_file_path }}"
+        # echo "-------------------------------------------------------"
+        # echo "Full logs are available under: {{ log_dir_base }}"
+        # echo "-------------------------------------------------------"
+        
+        exit $EXECUTION_ERROR
+      register: test_results
+      ignore_errors: yes
+      no_log: true
+
+    - debug: msg="{{ test_results.stdout_lines }}"
+
+    - name: Delete DSN directory (optional cleanup)
+      file:
+        path: "{{ dsn_dest_path }}"
+        state: absent
+      when: delete_dsn_before_start | default(false) | bool
+
+    - name: Start Integration Server
+      shell: "{{ ace_profile }} && ibmint start server {{ eg_name }} --integration-node {{ broker_name }}"
+      register: start_result
+
+    - debug: msg="{{ start_result.stdout_lines }}"
+
+    - name: Display test summary table
+      shell: |
+        echo "\nTEST SUMMARY"
+        echo "================================================================================="
+        awk -F, 'BEGIN {printf "%-35s %-10s %-8s %-8s %-8s %-8s\n", "Project", "Status", "Pass", "Fail", "Abort", "Time" }
+             NR>1 {printf "%-35s %-10s %-8s %-8s %-8s %-8s\n", $1, $2, $3, $4, $5, $6}' {{ summary_file_path }}
+        echo "================================================================================="
+      register: summary_content
+      ignore_errors: yes
+
+    - debug: msg="{{ summary_content.stdout_lines }}"
+      when: summary_content.rc == 0
+
