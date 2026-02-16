@@ -12,7 +12,7 @@ usage() {
     echo ""
     echo "Optional parameters:"
     echo "  --log-base <path>      - Base directory for log files (default: console output)"
-    echo "  --test-filter <pattern> - Filter test projects by pattern (default: GenTest_*)"
+    echo "  --test-filter <pattern> - Filter test projects by pattern (default: all test projects)"
     echo "                           Examples: 'GenTest_MyApp*', 'GenTest_Specific', '*Integration*'"
     exit 1
 }
@@ -33,7 +33,7 @@ fi
 
 # Default values
 LOG_BASE=""
-TEST_FILTER="GenTest_*"
+TEST_FILTER=""
 
 # Parse optional flags
 shift 3
@@ -100,62 +100,71 @@ echo "Test Project,Status,Passed,Failed,Aborted,Time(s),Log File" > "$SUMMARY_FI
 # Track if there were any execution errors (not test failures)
 EXECUTION_ERROR=0
 
-for TEST_PROJECT in "$RUN_DIR"/$TEST_FILTER; do
-    if [ -d "$TEST_PROJECT" ]; then
-        PROJECT_NAME=$(basename "$TEST_PROJECT")
-        LOG_FILE="${LOG_BASE}/${PROJECT_NAME}.log"
-        CMD="IntegrationServer --work-dir ${SERVER_DIR} --no-nodejs --start-msgflows false --mq-queue-manager-name ${QM_NAME} --test-project ${PROJECT_NAME}"
+# Find all test projects (directories with testproject.descriptor)
+if [ -n "$TEST_FILTER" ]; then
+    TEST_PROJECTS=$(find "$RUN_DIR" -maxdepth 1 -type d -name "$TEST_FILTER" | sort)
+else
+    TEST_PROJECTS=$(find "$RUN_DIR" -maxdepth 2 -name "testproject.descriptor" -exec dirname {} \; | sort)
+fi
 
-        echo "-------------------------------------------------------"
-        echo "Running test: $PROJECT_NAME"
-        echo "-------------------------------------------------------"
+for TEST_PROJECT in $TEST_PROJECTS; do
+    # Skip if not a directory or missing testproject.descriptor
+    [ ! -d "$TEST_PROJECT" ] && continue
+    [ ! -f "$TEST_PROJECT/testproject.descriptor" ] && continue
+    
+    PROJECT_NAME=$(basename "$TEST_PROJECT")
+    LOG_FILE="${LOG_BASE}/${PROJECT_NAME}.log"
+    CMD="IntegrationServer --work-dir ${SERVER_DIR} --no-nodejs --start-msgflows false --mq-queue-manager-name ${QM_NAME} --test-project ${PROJECT_NAME}"
 
-        # Run command
-        if [ -z "$LOG_BASE" ]; then
-            # Console mode
-            echo "Command: $CMD"
-            OUTPUT=$(eval "$CMD" 2>&1)
-            CMD_EXIT=$?
-            echo "$OUTPUT"
-        else
-            # File mode - always append
-            echo "Writing output to: $LOG_FILE"
-            echo "" >> "$LOG_FILE"
-            echo "-------------------------------------------------------" >> "$LOG_FILE"
-            echo "Test: $PROJECT_NAME" >> "$LOG_FILE"
-            echo "Command: $CMD" >> "$LOG_FILE"
-            echo "Started at: $(date)" >> "$LOG_FILE"
-            echo "-------------------------------------------------------" >> "$LOG_FILE"
-            OUTPUT=$(eval "$CMD" 2>&1)
-            CMD_EXIT=$?
-            echo "$OUTPUT" >> "$LOG_FILE"
-        fi
+    echo "-------------------------------------------------------"
+    echo "Running test: $PROJECT_NAME"
+    echo "-------------------------------------------------------"
 
-        # Extract test metrics with defaults (AIX-compatible)
-        PASSED=$(echo "$OUTPUT" | grep 'PASSED' | grep ':' | sed 's/.*://;s/[^0-9]//g' | tail -1)
-        FAILED=$(echo "$OUTPUT" | grep 'FAILED' | grep ':' | sed 's/.*://;s/[^0-9]//g' | tail -1)
-        ABORTED=$(echo "$OUTPUT" | grep 'ABORTED' | grep ':' | sed 's/.*://;s/[^0-9]//g' | tail -1)
-        TIME=$(echo "$OUTPUT" | grep 'TIME(secs)' | grep ':' | sed 's/.*://;s/[^0-9.]//g' | tail -1)
-        
-        # Set defaults if empty
-        PASSED=${PASSED:-0}
-        FAILED=${FAILED:-0}
-        ABORTED=${ABORTED:-0}
-        TIME=${TIME:-0}
-
-        # Determine status - simplified logic
-        if [ "$PASSED" = "0" ] && [ "$FAILED" = "0" ]; then
-            STATUS="ERROR"
-            EXECUTION_ERROR=1
-        elif [ "$FAILED" -gt 0 ] || [ "$ABORTED" -gt 0 ]; then
-            STATUS="FAIL"
-        else
-            STATUS="PASS"
-        fi
-
-        # Write to summary file
-        echo "${PROJECT_NAME},${STATUS},${PASSED},${FAILED},${ABORTED},${TIME},${LOG_FILE:-}" >> "$SUMMARY_FILE"
+    # Run command
+    if [ -z "$LOG_BASE" ]; then
+        # Console mode
+        echo "Command: $CMD"
+        OUTPUT=$(eval "$CMD" 2>&1)
+        CMD_EXIT=$?
+        echo "$OUTPUT"
+    else
+        # File mode - always append
+        echo "Writing output to: $LOG_FILE"
+        echo "" >> "$LOG_FILE"
+        echo "-------------------------------------------------------" >> "$LOG_FILE"
+        echo "Test: $PROJECT_NAME" >> "$LOG_FILE"
+        echo "Command: $CMD" >> "$LOG_FILE"
+        echo "Started at: $(date)" >> "$LOG_FILE"
+        echo "-------------------------------------------------------" >> "$LOG_FILE"
+        OUTPUT=$(eval "$CMD" 2>&1)
+        CMD_EXIT=$?
+        echo "$OUTPUT" >> "$LOG_FILE"
     fi
+
+    # Extract test metrics with defaults (AIX-compatible)
+    PASSED=$(echo "$OUTPUT" | grep 'PASSED' | grep ':' | sed 's/.*://;s/[^0-9]//g' | tail -1)
+    FAILED=$(echo "$OUTPUT" | grep 'FAILED' | grep ':' | sed 's/.*://;s/[^0-9]//g' | tail -1)
+    ABORTED=$(echo "$OUTPUT" | grep 'ABORTED' | grep ':' | sed 's/.*://;s/[^0-9]//g' | tail -1)
+    TIME=$(echo "$OUTPUT" | grep 'TIME(secs)' | grep ':' | sed 's/.*://;s/[^0-9.]//g' | tail -1)
+    
+    # Set defaults if empty
+    PASSED=${PASSED:-0}
+    FAILED=${FAILED:-0}
+    ABORTED=${ABORTED:-0}
+    TIME=${TIME:-0}
+
+    # Determine status - simplified logic
+    if [ "$PASSED" = "0" ] && [ "$FAILED" = "0" ]; then
+        STATUS="ERROR"
+        EXECUTION_ERROR=1
+    elif [ "$FAILED" -gt 0 ] || [ "$ABORTED" -gt 0 ]; then
+        STATUS="FAIL"
+    else
+        STATUS="PASS"
+    fi
+
+    # Write to summary file
+    echo "${PROJECT_NAME},${STATUS},${PASSED},${FAILED},${ABORTED},${TIME},${LOG_FILE:-}" >> "$SUMMARY_FILE"
 done
 
 echo
@@ -170,6 +179,7 @@ if [ -n "$LOG_BASE" ]; then
     echo "Full logs are available under: $LOG_BASE"
     echo "-------------------------------------------------------"
 fi
+echo "SUMMARY_FILE_PATH=${SUMMARY_FILE}"
 
 # Exit with 0 if tests ran successfully (even if some tests failed)
 # Exit with 1 only if there was an execution error

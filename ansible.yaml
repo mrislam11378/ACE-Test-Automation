@@ -34,7 +34,7 @@
 
     - name: Check for DSN directory differences
       # -n is dry run, -v is verbose, -r is recursive, -c is checksum
-      shell: "rsync -rcvn --delete {{ dsn_src_path }}/ {{ dsn_dest_path }}/DSN  || echo 'No differences found'"
+      shell: "rsync -rcvn --delete {{ dsn_src_path }}/{{ dsn_dest_path }}/DSN  || echo 'No differences found'"
       register: dsn_diff
       changed_when: false
 
@@ -66,3 +66,14 @@
       register: start_result
 
     - debug: msg="{{ start_result.stdout_lines }}"
+
+    - name: Display test summary after server start
+      shell: >
+        SUMMARY_FILE=$(echo '{{ test_results.stdout }}' | grep 'SUMMARY_FILE_PATH=' | cut -d'=' -f2) &&
+        [ -n "$SUMMARY_FILE" ] && [ -f "$SUMMARY_FILE" ] && cat "$SUMMARY_FILE" || true
+      register: summary_content
+      ignore_errors: yes
+
+    - debug: msg="{{ summary_content.stdout_lines }}"
+      when: summary_content.stdout != ""
+
