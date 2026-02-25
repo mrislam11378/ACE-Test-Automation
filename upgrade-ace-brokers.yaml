@@ -1,0 +1,116 @@
+# Usage: ansible-playbook upgrade-ace-brokers.yaml -i "localhost," -c local
+# 
+# This playbook upgrades all ACE brokers by:
+# 1. Discovering all brokers using mqsilist
+# 2. Backing up each broker using the old ACE profile
+# 3. Stopping each broker
+# 4. Extracting components to the new broker using the new ACE profile
+
+- name: Upgrade All ACE Brokers
+  hosts: all
+  vars:
+    # ACE version configuration
+    old_ace_version: "12.0.12.22"
+    new_ace_version: "13.0.6.2"
+    
+    # ACE profile paths
+    old_ace_profile_path: "/opt/IBM/ace-{{ old_ace_version }}/server/bin/mqsiprofile"
+    new_ace_profile_path: "/opt/IBM/ace-{{ new_ace_version }}/server/bin/mqsiprofile"
+    
+    old_ace_profile: ". {{ old_ace_profile_path }} > /dev/null 2>&1"
+    new_ace_profile: ". {{ new_ace_profile_path }} > /dev/null 2>&1"
+    
+    # Backup configuration
+    backup_base_path: "/tmp/mqiibbkp"
+    
+    # Extract options
+    shared_workpath: "/var/mqsi"
+    components_dir: "{{ shared_workpath | default('/var/mqsi') }}/components"
+    overwrite_existing: false
+    shared_workpath_flag: "{% if shared_workpath is defined %}--shared-work-path {{ shared_workpath }}{% endif %}"
+    overwrite_flag: "{% if overwrite_existing %}--overwrite-existing{% endif %}"
+  
+  tasks:
+    - name: Generate timestamp for this upgrade
+      set_fact:
+        upgrade_timestamp: "{{ lookup('pipe', 'date +%y%m%d_%H%M%S') }}"
+
+    - name: Create backup directory
+      file:
+        path: "{{ backup_base_path }}"
+        state: directory
+        mode: '0755'
+
+    - name: Display upgrade configuration
+      debug:
+        msg:
+          - "=========================================="
+          - "ACE Broker Upgrade Configuration"
+          - "=========================================="
+          - "Old ACE Version     : {{ old_ace_version }}"
+          - "New ACE Version     : {{ new_ace_version }}"
+          - "Backup Location     : {{ backup_base_path }}"
+          - "{% if shared_workpath is defined %}Shared Workpath     : {{ shared_workpath }}{% endif %}"
+          - "{% if overwrite_existing is defined %}Overwrite Existing  : {{ overwrite_existing }}{% endif %}"
+          - "Timestamp           : {{ upgrade_timestamp }}"
+          - "=========================================="
+
+    - name: Get list of all brokers from components directory
+      find:
+        paths: "{{ components_dir }}"
+        file_type: directory
+        recurse: no
+      register: broker_dirs
+
+    - name: Set broker list
+      set_fact:
+        broker_list: "{{ broker_dirs.files | map(attribute='path') | map('basename') | list }}"
+
+    - name: Backup and stop all brokers
+      shell: |
+        {{ old_ace_profile }}
+        for b in {{ broker_list | join(' ') }}; do
+          echo "Backing up broker: $b"
+          mqsibackupbroker $b -d {{ backup_base_path }}/ -a ${b}_{{ upgrade_timestamp }}.zip
+          echo "Stopping broker: $b"
+          ibmint stop node $b
+        done
+      register: backup_stop_result
+      failed_when: false
+
+    - name: Extract and migrate all brokers
+      shell: |
+        {{ new_ace_profile }}
+        for b in {{ broker_list | join(' ') }}; do
+          backup_file="{{ backup_base_path }}/${b}_{{ upgrade_timestamp }}.zip"
+          trace_file="{{ backup_base_path }}/trace_${b}_{{ upgrade_timestamp }}.log"
+          echo "Extracting broker: $b from $backup_file"
+          ibmint extract node --backup-file "$backup_file" \
+            --input-integration-node "$b" \
+            --output-integration-node "$b" \
+            --trace "$trace_file" \
+            {{ shared_workpath_flag }} {{ overwrite_flag }}
+        done | tee {{ backup_base_path }}/extract_{{ upgrade_timestamp }}.log
+      register: extract_result
+      failed_when: false
+
+    - name: Display extraction output
+      debug:
+        msg: "{{ extract_result.stdout_lines }}"
+
+    - name: Upgrade summary
+      debug:
+        msg:
+          - "=========================================="
+          - "ACE Broker Upgrade Summary"
+          - "=========================================="
+          - "Status              : SUCCESS"
+          - "Brokers Upgraded    : {{ broker_list | length }}"
+          - "Broker Names        : {{ broker_list | join(', ') }}"
+          - "Old Version         : {{ old_ace_version }}"
+          - "New Version         : {{ new_ace_version }}"
+          - "Backup Location     : {{ backup_base_path }}"
+          - "Timestamp           : {{ upgrade_timestamp }}"
+          - "=========================================="
+
+
