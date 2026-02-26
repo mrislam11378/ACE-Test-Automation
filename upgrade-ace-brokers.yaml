@@ -1,4 +1,4 @@
-# Usage: ansible-playbook upgrade-ace-brokers.yaml -i "localhost," -c local
+# Usage: ansible-playbook upgrade-ace-brokers.yaml
 # 
 # This playbook upgrades all ACE brokers by:
 # 1. Discovering all brokers using mqsilist
@@ -7,16 +7,18 @@
 # 4. Extracting components to the new broker using the new ACE profile
 
 - name: Upgrade All ACE Brokers
-  hosts: all
+  hosts: p1318-pvm1.p1318.cecc.ihost.com
+  become: true
+  become_user: aceuser
   vars:
-    # ACE version configuration
+    # Required - Edit these values
+    broker_list: []  # Leave empty to auto-discover all running brokers
     old_ace_version: "12.0.12.22"
     new_ace_version: "13.0.6.2"
     
     # ACE profile paths
     old_ace_profile_path: "/opt/IBM/ace-{{ old_ace_version }}/server/bin/mqsiprofile"
     new_ace_profile_path: "/opt/IBM/ace-{{ new_ace_version }}/server/bin/mqsiprofile"
-    
     old_ace_profile: ". {{ old_ace_profile_path }} > /dev/null 2>&1"
     new_ace_profile: ". {{ new_ace_profile_path }} > /dev/null 2>&1"
     
@@ -24,16 +26,18 @@
     backup_base_path: "/tmp/mqiibbkp"
     
     # Extract options
-    shared_workpath: "/var/mqsi"
-    components_dir: "{{ shared_workpath | default('/var/mqsi') }}/components"
-    overwrite_existing: false
+    shared_workpath: "/var"
+    overwrite_existing: true
+    
+    # Internal paths - Do not modify unless necessary
+    components_dir: "{{ shared_workpath }}/components"
     shared_workpath_flag: "{% if shared_workpath is defined %}--shared-work-path {{ shared_workpath }}{% endif %}"
     overwrite_flag: "{% if overwrite_existing %}--overwrite-existing{% endif %}"
   
   tasks:
-    - name: Generate timestamp for this upgrade
+    - name: Generate timestamp
       set_fact:
-        upgrade_timestamp: "{{ lookup('pipe', 'date +%y%m%d_%H%M%S') }}"
+        upgrade_timestamp: "{{ lookup('pipe', 'date +%Y%m%d_%H%M%S') }}"
 
     - name: Create backup directory
       file:
@@ -41,7 +45,37 @@
         state: directory
         mode: '0755'
 
-    - name: Display upgrade configuration
+    - name: Get list of running brokers from mqsilist
+      shell: |
+        {{ old_ace_profile }}
+        mqsilist | grep node | cut -d "'" -f2
+      register: mqsilist_output
+      changed_when: false
+      failed_when: false
+
+    - name: Set running brokers list
+      set_fact:
+        running_brokers: "{{ mqsilist_output.stdout_lines | default([]) }}"
+
+    - name: Validate user-defined brokers exist in mqsilist
+      assert:
+        that:
+          - item in running_brokers
+        fail_msg: "Broker '{{ item }}' not found in mqsilist. Available brokers: {{ running_brokers | join(', ') }}"
+      loop: "{{ broker_list }}"
+      when: broker_list | length > 0
+
+    - name: Set broker list (use user-defined or auto-discover)
+      set_fact:
+        broker_list: "{{ broker_list if broker_list | length > 0 else running_brokers }}"
+
+    - name: Validate broker list is not empty
+      assert:
+        that:
+          - broker_list | length > 0
+        fail_msg: "No brokers found. Please specify brokers in broker_list or ensure brokers are running."
+
+    - name: Display upgrade configuration and brokers
       debug:
         msg:
           - "=========================================="
@@ -50,21 +84,13 @@
           - "Old ACE Version     : {{ old_ace_version }}"
           - "New ACE Version     : {{ new_ace_version }}"
           - "Backup Location     : {{ backup_base_path }}"
-          - "{% if shared_workpath is defined %}Shared Workpath     : {{ shared_workpath }}{% endif %}"
-          - "{% if overwrite_existing is defined %}Overwrite Existing  : {{ overwrite_existing }}{% endif %}"
+          - "Shared Workpath     : {{ shared_workpath }}"
+          - "Overwrite Existing  : {{ overwrite_existing }}"
           - "Timestamp           : {{ upgrade_timestamp }}"
           - "=========================================="
-
-    - name: Get list of all brokers from components directory
-      find:
-        paths: "{{ components_dir }}"
-        file_type: directory
-        recurse: no
-      register: broker_dirs
-
-    - name: Set broker list
-      set_fact:
-        broker_list: "{{ broker_dirs.files | map(attribute='path') | map('basename') | list }}"
+          - "Brokers to Upgrade  : {{ broker_list | join(', ') }}"
+          - "Total Broker Count  : {{ broker_list | length }}"
+          - "=========================================="
 
     - name: Backup and stop all brokers
       shell: |
@@ -76,7 +102,10 @@
           ibmint stop node $b
         done
       register: backup_stop_result
-      failed_when: false
+      ignore_errors: yes
+
+    - debug:
+        msg: "{{ backup_stop_result.stdout_lines }}"
 
     - name: Extract and migrate all brokers
       shell: |
@@ -92,10 +121,9 @@
             {{ shared_workpath_flag }} {{ overwrite_flag }}
         done | tee {{ backup_base_path }}/extract_{{ upgrade_timestamp }}.log
       register: extract_result
-      failed_when: false
+      ignore_errors: yes
 
-    - name: Display extraction output
-      debug:
+    - debug:
         msg: "{{ extract_result.stdout_lines }}"
 
     - name: Upgrade summary
