@@ -7,43 +7,48 @@
     broker_name: "TestNode"
     eg_name: "TestServer"
     qm_name: "MYQMGR"
-    test_script_dir: "/home/raiyan/ansible/"
     ace_version: "12.0.12.22"
     ace_profile_path: "/opt/IBM/ace-{{ ace_version }}/server/bin/mqsiprofile"
     ace_profile: "[ -f ~/.bash_profile ] && . ~/.bash_profile || . {{ ace_profile_path }}"
-    
-    # File ownership
-    file_owner: "raiyan"
-    file_group: "mqbrkrs"
 
     # Log Directory (Static path as requested)
     log_dir_base: "/tmp/GenTestRun"
+    zip_dest_dir: "/tmp"
     # delete_dsn_before_start: true  # WARNING: Deletes DSN directory before starting server
 
+    # Email configuration
+    smtp_host: "smtp.example.com"
+    smtp_port: 25
+    email_from: "ace-tests@example.com"
+    email_to: ""  # Leave empty to skip email notification
+    email_cc: []  # Optional - List of CC recipients, e.g., ["manager@example.com", "techlead@example.com"]
+
     # Internal paths - Do not modify unless necessary
+    ace_command: "IntegrationServer --work-dir {{ server_dir }} --no-nodejs --start-msgflows false --mq-queue-manager-name {{ qm_name }}"
     mqsi_workpath: "/var/mqsi"
     server_dir: "{{ mqsi_workpath }}/components/{{ broker_name }}/servers/{{ eg_name }}"
     run_dir: "{{ server_dir }}/run"
     dsn_src_path: "{{ mqsi_workpath }}/registry/{{ broker_name }}/CurrentVersion/DSN"
     dsn_dest_path: "{{ server_dir }}/config/registry/integration_server/CurrentVersion/DSN"
   
-  pre_tasks:
-    - name: Generate timestamp for this run
+  tasks:
+    - name: Generate timestamp
       set_fact:
         run_timestamp: "{{ lookup('pipe', 'date +%Y%m%d_%H%M%S') }}"
-        
-    - name: Set summary file paths
+
+    - name: Set file paths
       set_fact:
         summary_file_name: "summary_{{ broker_name }}_{{ eg_name }}_{{ run_timestamp }}.csv"
         summary_file_path: "{{ log_dir_base }}/summary_{{ broker_name }}_{{ eg_name }}_{{ run_timestamp }}.csv"
+        zip_file_path: "{{ zip_dest_dir }}/GenTestRun_{{ run_timestamp }}.zip"
 
-  tasks:
     - name: Stop Integration Server
       shell: "{{ ace_profile }} && ibmint stop server {{ eg_name }} --integration-node {{ broker_name }}"
       register: stop_result
       failed_when: stop_result.rc != 0
 
-    - debug: msg="{{ stop_result.stdout_lines }}"
+    - debug:
+        msg: "{{ stop_result.stdout_lines }}"
 
     - name: Check for DSN directory differences
       # -n is dry run, -v is verbose, -r is recursive, -c is checksum
@@ -54,17 +59,24 @@
     - debug:
         msg: "{{ dsn_diff.stdout_lines }}"
 
-    - name: Setup test environment
+    - name: Create log directory
+      file:
+        path: "{{ log_dir_base }}"
+        state: directory
+        mode: '0755'
+
+    - name: Create summary CSV header
+      copy:
+        content: "Test Project,Status,Passed,Failed,Aborted,Time(s),Log File\n"
+        dest: "{{ summary_file_path }}"
+
+    - name: Validate directories
       shell: |
         {{ ace_profile }}
         
         # Validate directories
         [ ! -d "{{ server_dir }}" ] && { echo "Error: Server directory not found: {{ server_dir }}"; exit 1; }
         [ ! -d "{{ run_dir }}" ] && { echo "Error: Run directory not found: {{ run_dir }}"; exit 1; }
-        
-        # Setup summary file
-        mkdir -p "{{ log_dir_base }}"
-        echo "Test Project,Status,Passed,Failed,Aborted,Time(s),Log File" > "{{ summary_file_path }}"
         
         # Display configuration
         echo "-------------------------------------------------------"
@@ -77,7 +89,8 @@
         echo "-------------------------------------------------------"
       register: setup_result
 
-    - debug: msg="{{ setup_result.stdout_lines }}"
+    - debug:
+        msg: "{{ setup_result.stdout_lines }}"
 
     - name: Run all tests
       shell: |
@@ -86,7 +99,6 @@
         EXECUTION_ERROR=0
         
         # Find test projects
-        # TEST_PROJECTS=$(find {{ run_dir }} \( -path "{{ run_dir }}/*/*/*" -prune \) -o -name "testproject.descriptor" -exec dirname {} \; | sort)
         TEST_PROJECTS=$(find {{ run_dir }} \( -path "{{ run_dir }}/*/*/*" -prune \) -o -name "testproject.descriptor" -print | xargs -I {} dirname {} | sort)
 
         [ -z "$TEST_PROJECTS" ] && { echo "No test projects found."; exit 0; }
@@ -100,7 +112,7 @@
           
           echo "-------------------------------------------------------"
           echo "Running test: $PROJECT_NAME"
-          echo "Command: IntegrationServer --work-dir {{ server_dir }} --no-nodejs --start-msgflows false --mq-queue-manager-name {{ qm_name }} --test-project ${PROJECT_NAME}"
+          echo "Command: {{ ace_command }} --test-project ${PROJECT_NAME}"
           echo "-------------------------------------------------------"
           echo "Writing output to: $LOG_FILE"
           
@@ -109,10 +121,10 @@
             echo ""
             echo "-------------------------------------------------------"
             echo "Test: $PROJECT_NAME"
-            echo "Command: IntegrationServer --work-dir {{ server_dir }} --no-nodejs --start-msgflows false --mq-queue-manager-name {{ qm_name }} --test-project ${PROJECT_NAME}"
+            echo "Command: {{ ace_command }} --test-project ${PROJECT_NAME}"
             echo "Started at: $(date)"
             echo "-------------------------------------------------------"
-            OUTPUT=$(IntegrationServer --work-dir "{{ server_dir }}" --no-nodejs --start-msgflows false --mq-queue-manager-name "{{ qm_name }}" --test-project "${PROJECT_NAME}" 2>&1)
+            OUTPUT=$({{ ace_command }} --test-project "${PROJECT_NAME}" 2>&1)
             echo "$OUTPUT"
           } >> "$LOG_FILE"
           
@@ -144,19 +156,21 @@
       ignore_errors: yes
       no_log: true
 
-    - debug: msg="{{ test_results.stdout_lines }}"
+    - debug:
+        msg: "{{ test_results.stdout_lines }}"
 
     - name: Delete DSN directory (optional cleanup)
       file:
         path: "{{ dsn_dest_path }}"
         state: absent
-      when: delete_dsn_before_start | default(false) | bool
+      when: delete_dsn_before_start | default(false)
 
     - name: Start Integration Server
       shell: "{{ ace_profile }} && ibmint start server {{ eg_name }} --integration-node {{ broker_name }}"
       register: start_result
 
-    - debug: msg="{{ start_result.stdout_lines }}"
+    - debug:
+        msg: "{{ start_result.stdout_lines }}"
 
     - name: Display test summary table
       shell: |
@@ -171,3 +185,49 @@
     - debug: msg="{{ summary_content.stdout_lines }}"
       when: summary_content.rc == 0
 
+    - name: Create zip archive of log directory
+      archive:
+        path: "{{ log_dir_base }}"
+        dest: "{{ zip_file_path }}"
+        format: zip
+      register: zip_result
+
+    - debug:
+        msg: "Log directory archived to: {{ zip_file_path }}"
+      when: zip_result is succeeded
+
+    - name: Send test results email with attachment
+      community.general.mail:
+        host: "{{ smtp_host }}"
+        port: "{{ smtp_port }}"
+        from: "{{ email_from }}"
+        to: "{{ email_to }}"
+        cc: "{{ email_cc }}"
+        subject: "ACE Test Results - {{ broker_name }}/{{ eg_name }} - {{ run_timestamp }}"
+        body: |
+          ACE Integration Server Test Results
+          ====================================
+          
+          Broker: {{ broker_name }}
+          Server: {{ eg_name }}
+          Timestamp: {{ run_timestamp }}
+          
+          Test Summary:
+          {{ summary_content.stdout }}
+          
+          Full test logs are attached as a zip file.
+          
+          Zip file location on server: {{ zip_file_path }}
+        attach: "{{ zip_file_path }}"
+      when:
+        - email_to | length > 0
+        - zip_result is succeeded
+      register: email_result
+      ignore_errors: yes
+
+    - name: Display email status
+      debug:
+        msg: "{{ 'Email sent successfully to ' + email_to if email_result is succeeded else 'Failed to send email: ' + (email_result.msg | default('Unknown error')) }}"
+      when:
+        - email_to | length > 0
+        - email_result is defined
