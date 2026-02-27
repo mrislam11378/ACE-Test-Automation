@@ -1,0 +1,65 @@
+---
+- name: Check shared_workpath exists
+  stat:
+    path: "{{ shared_workpath }}"
+  register: shared_workpath_check
+
+- name: Assert shared_workpath exists and is a directory
+  assert:
+    that:
+      - shared_workpath_check.stat.exists
+      - shared_workpath_check.stat.isdir
+    fail_msg: "shared_workpath '{{ shared_workpath }}' does not exist or is not a directory"
+
+- name: Stop all brokers
+  become: true
+  become_user: "{{ mqm_user }}"
+  shell: |
+    {{ old_ace_profile }}
+    for b in {{ brokers | join(' ') }}; do
+      echo "Stopping broker: $b"
+      ibmint stop node $b
+    done
+  register: stop_result
+  failed_when: false
+  # failed_when: false is intentional — stopping an already-stopped broker
+  # returns a non-zero exit code; we do not want that to abort the playbook
+
+- name: Display stop output
+  debug:
+    msg: "{{ stop_result.stdout_lines }}"
+
+- name: Extract and migrate all brokers
+  become: true
+  become_user: "{{ mqm_user }}"
+  shell: |
+    {{ new_ace_profile }}
+    for b in {{ brokers | join(' ') }}; do
+      backup_file="{{ backup_base_path }}/${b}_{{ upgrade_timestamp }}.zip"
+      trace_file="{{ backup_base_path }}/trace_${b}_{{ upgrade_timestamp }}.log"
+      echo "Extracting broker: $b from $backup_file"
+      ibmint extract node --backup-file "$backup_file" \
+        --input-integration-node "$b" \
+        --output-integration-node "$b" \
+        {% if enable_trace %}--trace "$trace_file"{% endif %} \
+        --shared-work-path {{ shared_workpath }} {{ overwrite_flag }}
+    done | tee {{ backup_base_path }}/extract_{{ upgrade_timestamp }}.log
+  register: extract_result
+
+- name: Display extraction output
+  debug:
+    msg: "{{ extract_result.stdout_lines }}"
+
+- name: Upgrade summary
+  debug:
+    msg:
+      - "=========================================="
+      - "ACE Broker Upgrade Summary"
+      - "=========================================="
+      - "Status              : {{ 'SUCCESS' if extract_result.rc == 0 else 'FAILED (rc=' + (extract_result.rc | string) + ')' }}"
+      - "Brokers             : {{ brokers | join(', ') }}"
+      - "Old Version         : {{ old_ace_version }}"
+      - "New Version         : {{ new_ace_version }}"
+      - "Backup Location     : {{ backup_base_path }}"
+      - "Timestamp           : {{ upgrade_timestamp }}"
+      - "=========================================="

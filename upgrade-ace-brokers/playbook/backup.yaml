@@ -1,0 +1,78 @@
+---
+- name: Check backup_base_path exists
+  stat:
+    path: "{{ backup_base_path }}"
+  register: backup_path_check
+
+- name: Assert backup_base_path exists and is a directory
+  assert:
+    that:
+      - backup_path_check.stat.exists
+      - backup_path_check.stat.isdir
+    fail_msg: "backup_base_path '{{ backup_base_path }}' does not exist or is not a directory"
+
+- name: Generate timestamp for this upgrade
+  set_fact:
+    upgrade_timestamp: "{{ lookup('pipe', 'date +%Y%m%d_%H%M%S') }}"
+
+- name: Validate broker_list is provided
+  assert:
+    that:
+      - broker_list | length > 0
+    fail_msg: "broker_list is required as a non-empty comma separated string (e.g. 'broker1,broker2')"
+
+- name: Parse broker_list into brokers list
+  set_fact:
+    brokers: "{{ broker_list.split(',') | map('trim') | select('ne', '') | list }}"
+
+- name: Get list of running brokers from mqsilist
+  become: true
+  become_user: "{{ mqm_user }}"
+  shell: |
+    {{ old_ace_profile }}
+    mqsilist | grep node | cut -d "'" -f2
+  register: mqsilist_output
+  changed_when: false
+  failed_when: false
+
+- name: Set running brokers list
+  set_fact:
+    running_brokers: "{{ mqsilist_output.stdout_lines | default([]) }}"
+
+- name: Validate brokers exist in mqsilist
+  assert:
+    that:
+      - item in running_brokers
+    fail_msg: "Broker '{{ item }}' not found in mqsilist. Available brokers: {{ running_brokers | join(', ') }}"
+  loop: "{{ brokers }}"
+
+- name: Display upgrade configuration
+  debug:
+    msg:
+      - "=========================================="
+      - "ACE Broker Upgrade Configuration"
+      - "=========================================="
+      - "Old ACE Version     : {{ old_ace_version }}"
+      - "New ACE Version     : {{ new_ace_version }}"
+      - "Backup Location     : {{ backup_base_path }}"
+      - "Multi Instance      : {{ is_multi_instance }}"
+      - "Active Work Path    : {{ shared_workpath if is_multi_instance else work_path }}"
+      - "Overwrite Existing  : {{ overwrite_existing }}"
+      - "Brokers             : {{ brokers | join(', ') }}"
+      - "Timestamp           : {{ upgrade_timestamp }}"
+      - "=========================================="
+
+- name: Backup all brokers
+  become: true
+  become_user: "{{ mqm_user }}"
+  shell: |
+    {{ old_ace_profile }}
+    for b in {{ brokers | join(' ') }}; do
+      echo "Backing up broker: $b"
+      mqsibackupbroker $b -d {{ backup_base_path }}/ -a ${b}_{{ upgrade_timestamp }}.zip
+    done
+  register: backup_result
+
+- name: Display backup output
+  debug:
+    msg: "{{ backup_result.stdout_lines }}"

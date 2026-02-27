@@ -1,0 +1,36 @@
+# Usage: ansible-playbook playbook/main.yaml -i hosts.ini
+#        ansible-playbook playbook/main.yaml -i hosts.ini -e "broker_list=broker1,broker2"
+#
+# This playbook manages ACE broker maintenance by:
+# 1. Backing up each broker using the old ACE profile     (when backup_broker: true)
+# 2. Stopping each broker                                 (when backup_broker: true AND upgrade_brokers: true)
+# 3. Extracting/migrating brokers to the new ACE version  (when backup_broker: true AND upgrade_brokers: true)
+#
+# Upgrade task file is selected automatically based on is_multi_instance in vars/main.yaml:
+#   is_multi_instance: true   → upgrade_multi_instance.yaml  (uses --shared-work-path)
+#   is_multi_instance: false  → upgrade.yaml                  (uses --work-path)
+
+- name: Upgrade ACE Brokers
+  hosts: all
+  become: true
+  become_user: "{{ mqm_user }}"
+  vars_files:
+    - ../vars/main.yaml
+  tasks:
+    - name: Include backup tasks
+      include_tasks: backup.yaml
+      when: backup_broker | bool
+
+    - name: Include upgrade tasks (work_path)
+      include_tasks: upgrade.yaml
+      when:
+        - backup_broker | bool
+        - upgrade_brokers | bool
+        - not is_multi_instance | bool
+
+    - name: Include upgrade tasks (shared_workpath)
+      include_tasks: upgrade_multi_instance.yaml
+      when:
+        - backup_broker | bool
+        - upgrade_brokers | bool
+        - is_multi_instance | bool

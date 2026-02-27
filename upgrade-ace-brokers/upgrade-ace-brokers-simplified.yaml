@@ -11,10 +11,11 @@
   become: true
   become_user: aceuser
   vars:
-    # Required - Provide broker_list as comma-separated string or list
-    broker_list: []
+    # Required - Provide broker_list as comma-separated string
+    broker_list: ""
     old_ace_version: "12.0.12.22"
     new_ace_version: "13.0.6.2"
+    enable_trace: true
     
     # ACE profile paths
     old_ace_profile_path: "/opt/IBM/ace-{{ old_ace_version }}/server/bin/mqsiprofile"
@@ -26,24 +27,13 @@
     backup_base_path: "/tmp/mqiibbkp"
     
     # Extract options
-    shared_workpath: "/var"
     overwrite_existing: true
-    
-    # Internal paths - Do not modify unless necessary
-    components_dir: "{{ shared_workpath }}/components"
-    shared_workpath_flag: "{% if shared_workpath is defined %}--shared-work-path {{ shared_workpath }}{% endif %}"
-    overwrite_flag: "{% if overwrite_existing %}--overwrite-existing{% endif %}"
+    overwrite_flag: "{{ '--overwrite-existing' if overwrite_existing else '' }}"
   
   tasks:
     - name: Generate timestamp
       set_fact:
         upgrade_timestamp: "{{ lookup('pipe', 'date +%Y%m%d_%H%M%S') }}"
-
-    - name: Create backup directory
-      file:
-        path: "{{ backup_base_path }}"
-        state: directory
-        mode: '0755'
 
     - name: Get list of running brokers from mqsilist
       shell: |
@@ -60,21 +50,19 @@
     - name: Validate broker_list is provided
       assert:
         that:
-          - broker_list is defined
           - broker_list | length > 0
-        fail_msg: "broker_list is required. Provide as comma-separated string or list: -e 'broker_list=broker1,broker2'"
+        fail_msg: "broker_list is required as a non-empty comma separated string (e.g. 'broker1,broker2')"
 
-    - name: Convert broker_list from comma-separated string to list
+    - name: Parse broker_list into brokers list
       set_fact:
-        broker_list: "{{ broker_list.split(',') | map('trim') | reject('equalto', '') | list }}"
-      when: broker_list is string
+        brokers: "{{ broker_list.split(',') | map('trim') | select('ne', '') | list }}"
 
     - name: Validate brokers exist in mqsilist
       assert:
         that:
           - item in running_brokers
         fail_msg: "Broker '{{ item }}' not found in mqsilist. Available brokers: {{ running_brokers | join(', ') }}"
-      loop: "{{ broker_list }}"
+      loop: "{{ brokers }}"
 
     - name: Display upgrade configuration and brokers
       debug:
@@ -85,46 +73,58 @@
           - "Old ACE Version     : {{ old_ace_version }}"
           - "New ACE Version     : {{ new_ace_version }}"
           - "Backup Location     : {{ backup_base_path }}"
-          - "Shared Workpath     : {{ shared_workpath }}"
           - "Overwrite Existing  : {{ overwrite_existing }}"
+          - "Enable Trace        : {{ enable_trace }}"
+          - "Brokers             : {{ brokers | join(', ') }}"
           - "Timestamp           : {{ upgrade_timestamp }}"
           - "=========================================="
-          - "Brokers to Upgrade  : {{ broker_list | join(', ') }}"
-          - "Total Broker Count  : {{ broker_list | length }}"
-          - "=========================================="
 
-    - name: Backup and stop all brokers
+    - name: Backup all brokers
       shell: |
         {{ old_ace_profile }}
-        for b in {{ broker_list | join(' ') }}; do
+        for b in {{ brokers | join(' ') }}; do
           echo "Backing up broker: $b"
           mqsibackupbroker $b -d {{ backup_base_path }}/ -a ${b}_{{ upgrade_timestamp }}.zip
+        done
+      register: backup_result
+
+    - name: Display backup output
+      debug:
+        msg: "{{ backup_result.stdout_lines }}"
+
+    - name: Stop all brokers
+      shell: |
+        {{ old_ace_profile }}
+        for b in {{ brokers | join(' ') }}; do
           echo "Stopping broker: $b"
           ibmint stop node $b
         done
-      register: backup_stop_result
-      ignore_errors: yes
+      register: stop_result
+      failed_when: false
+      # failed_when: false is intentional — stopping an already-stopped broker
+      # returns a non-zero exit code; we do not want that to abort the playbook
 
-    - debug:
-        msg: "{{ backup_stop_result.stdout_lines }}"
+    - name: Display stop output
+      debug:
+        msg: "{{ stop_result.stdout_lines }}"
 
     - name: Extract and migrate all brokers
       shell: |
         {{ new_ace_profile }}
-        for b in {{ broker_list | join(' ') }}; do
+        for b in {{ brokers | join(' ') }}; do
           backup_file="{{ backup_base_path }}/${b}_{{ upgrade_timestamp }}.zip"
           trace_file="{{ backup_base_path }}/trace_${b}_{{ upgrade_timestamp }}.log"
           echo "Extracting broker: $b from $backup_file"
           ibmint extract node --backup-file "$backup_file" \
             --input-integration-node "$b" \
             --output-integration-node "$b" \
-            --trace "$trace_file" \
-            {{ shared_workpath_flag }} {{ overwrite_flag }}
+            {% if enable_trace %}--trace "$trace_file"{% endif %} \
+            {{ overwrite_flag }}
         done | tee {{ backup_base_path }}/extract_{{ upgrade_timestamp }}.log
       register: extract_result
-      ignore_errors: yes
 
-    - debug:
+    - name: Display extraction output
+      debug:
         msg: "{{ extract_result.stdout_lines }}"
 
     - name: Upgrade summary
@@ -133,9 +133,8 @@
           - "=========================================="
           - "ACE Broker Upgrade Summary"
           - "=========================================="
-          - "Status              : SUCCESS"
-          - "Brokers Upgraded    : {{ broker_list | length }}"
-          - "Broker Names        : {{ broker_list | join(', ') }}"
+          - "Status              : {{ 'SUCCESS' if extract_result.rc == 0 else 'FAILED (rc=' + (extract_result.rc | string) + ')' }}"
+          - "Brokers             : {{ brokers | join(', ') }}"
           - "Old Version         : {{ old_ace_version }}"
           - "New Version         : {{ new_ace_version }}"
           - "Backup Location     : {{ backup_base_path }}"

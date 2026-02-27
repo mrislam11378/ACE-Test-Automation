@@ -1,0 +1,29 @@
+mqm_user: "raiyan"
+mqm_group: "mqbrkrs"
+
+# Survey Vars
+broker_list: "TestNode"
+env_name: "var"
+env_name_normalized: "{{ 'prd' if env_name in ['prda', 'prdb'] else env_name }}"
+old_ace_version: "12.0.12.22"
+new_ace_version: "13.0.6.2"
+backup_broker: true
+upgrade_brokers: true
+is_multi_instance: true
+enable_trace: true
+overwrite_existing: true
+
+# ACE profile paths
+old_ace_profile_path: "/opt/IBM/ace-{{ old_ace_version }}/server/bin/mqsiprofile"
+new_ace_profile_path: "/opt/IBM/ace-{{ new_ace_version }}/server/bin/mqsiprofile"
+old_ace_profile: ". {{ old_ace_profile_path }} > /dev/null 2>&1"
+new_ace_profile: ". {{ new_ace_profile_path }} > /dev/null 2>&1"
+
+# Backup configuration
+backup_base_path: "/tmp/mqiibbkp"
+
+# Internal paths - Do not modify unless necessary
+work_path: "/var/mqsi"
+shared_workpath: "/{{ env_name_normalized }}mqm/mqsi"
+components_dir: "{{ (shared_workpath if is_multi_instance else work_path) }}/components"
+overwrite_flag: "{{ '--overwrite-existing' if overwrite_existing else '' }}"
