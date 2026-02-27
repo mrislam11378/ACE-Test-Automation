@@ -1,0 +1,27 @@
+# Required - Edit these values
+broker_name: "TestNode"
+eg_name: "TestServer"
+qm_name: "MYQMGR"
+ace_version: "12.0.12.22"
+
+# Log Directory
+log_dir_base: "/tmp/GenTestRun"
+zip_dest_dir: "/tmp"
+# delete_dsn_before_start: true  # WARNING: Deletes DSN directory before starting server
+
+# Email configuration
+smtp_host: "smtp.example.com"
+smtp_port: 25
+email_from: "ace-tests@example.com"
+email_to: ""        # Leave empty to skip email notification
+email_cc: []        # Optional - List of CC recipients, e.g., ["manager@example.com", "techlead@example.com"]
+
+# Internal paths - Do not modify unless necessary
+ace_profile_path: "/opt/IBM/ace-{{ ace_version }}/server/bin/mqsiprofile"
+ace_profile: "[ -f ~/.bash_profile ] && . ~/.bash_profile || . {{ ace_profile_path }}"
+mqsi_workpath: "/var/mqsi"
+server_dir: "{{ mqsi_workpath }}/components/{{ broker_name }}/servers/{{ eg_name }}"
+run_dir: "{{ server_dir }}/run"
+dsn_src_path: "{{ mqsi_workpath }}/registry/{{ broker_name }}/CurrentVersion/DSN"
+dsn_dest_path: "{{ server_dir }}/config/registry/integration_server/CurrentVersion/DSN"
+ace_command: "IntegrationServer --work-dir {{ server_dir }} --no-nodejs --start-msgflows false --mq-queue-manager-name {{ qm_name }}"
