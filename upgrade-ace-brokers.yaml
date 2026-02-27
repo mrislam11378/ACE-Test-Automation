@@ -1,18 +1,18 @@
-# Usage: ansible-playbook upgrade-ace-brokers.yaml
-# 
-# This playbook upgrades all ACE brokers by:
-# 1. Discovering all brokers using mqsilist
+# Usage: ansible-playbook upgrade-ace-brokers.yaml -e "broker_list=broker1,broker2,broker3"
+#
+# This playbook upgrades specified ACE brokers by:
+# 1. Validating brokers exist in mqsilist
 # 2. Backing up each broker using the old ACE profile
 # 3. Stopping each broker
 # 4. Extracting components to the new broker using the new ACE profile
 
-- name: Upgrade All ACE Brokers
+- name: Upgrade ACE Brokers
   hosts: p1318-pvm1.p1318.cecc.ihost.com
   become: true
   become_user: aceuser
   vars:
-    # Required - Edit these values
-    broker_list: []  # Leave empty to auto-discover all running brokers
+    # Required - Provide broker_list as comma-separated string or list
+    broker_list: []
     old_ace_version: "12.0.12.22"
     new_ace_version: "13.0.6.2"
     
@@ -57,23 +57,24 @@
       set_fact:
         running_brokers: "{{ mqsilist_output.stdout_lines | default([]) }}"
 
-    - name: Validate user-defined brokers exist in mqsilist
+    - name: Validate broker_list is provided
+      assert:
+        that:
+          - broker_list is defined
+          - broker_list | length > 0
+        fail_msg: "broker_list is required. Provide as comma-separated string or list: -e 'broker_list=broker1,broker2'"
+
+    - name: Convert broker_list from comma-separated string to list
+      set_fact:
+        broker_list: "{{ broker_list.split(',') | map('trim') | reject('equalto', '') | list }}"
+      when: broker_list is string
+
+    - name: Validate brokers exist in mqsilist
       assert:
         that:
           - item in running_brokers
         fail_msg: "Broker '{{ item }}' not found in mqsilist. Available brokers: {{ running_brokers | join(', ') }}"
       loop: "{{ broker_list }}"
-      when: broker_list | length > 0
-
-    - name: Set broker list (use user-defined or auto-discover)
-      set_fact:
-        broker_list: "{{ broker_list if broker_list | length > 0 else running_brokers }}"
-
-    - name: Validate broker list is not empty
-      assert:
-        that:
-          - broker_list | length > 0
-        fail_msg: "No brokers found. Please specify brokers in broker_list or ensure brokers are running."
 
     - name: Display upgrade configuration and brokers
       debug:

@@ -38,7 +38,6 @@
 
     - name: Set file paths
       set_fact:
-        summary_file_name: "summary_{{ broker_name }}_{{ eg_name }}_{{ run_timestamp }}.csv"
         summary_file_path: "{{ log_dir_base }}/summary_{{ broker_name }}_{{ eg_name }}_{{ run_timestamp }}.csv"
         zip_file_path: "{{ zip_dest_dir }}/GenTestRun_{{ run_timestamp }}.zip"
 
@@ -197,7 +196,7 @@
       when: zip_result is succeeded
 
     - name: Send test results email with attachment
-      community.general.mail:
+      mail:
         host: "{{ smtp_host }}"
         port: "{{ smtp_port }}"
         from: "{{ email_from }}"
@@ -212,6 +211,8 @@
           Server: {{ eg_name }}
           Timestamp: {{ run_timestamp }}
           
+          DSN Diff:
+          {{ dsn_diff.stdout_lines }}
           Test Summary:
           {{ summary_content.stdout }}
           
