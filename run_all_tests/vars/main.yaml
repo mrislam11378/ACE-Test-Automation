@@ -7,6 +7,7 @@ ace_version: "12.0.12.22"
 # Log Directory
 log_dir_base: "/tmp/GenTestRun"
 zip_dest_dir: "/tmp"
+cleanup_log: false  # Set to true to clean log directory before each test run
 # delete_dsn_before_start: true  # WARNING: Deletes DSN directory before starting server
 
 # Email configuration
@@ -15,6 +16,11 @@ smtp_port: 25
 email_from: "ace-tests@example.com"
 email_to: ""        # Leave empty to skip email notification
 email_cc: []        # Optional - List of CC recipients, e.g., ["manager@example.com", "techlead@example.com"]
+
+# ODBC configuration
+odbcsysini: "/opt/ace/commonConfig/unixodbc/"
+odbcini: "/opt/ace/commonConfig/unixodbc/odbc.ini"
+odbcinstini: "/opt/ace/commonConfig/unixodbc/odbcinst.ini"
 
 # Internal paths - Do not modify unless necessary
 ace_profile_path: "/opt/IBM/ace-{{ ace_version }}/server/bin/mqsiprofile"
@@ -25,3 +31,38 @@ run_dir: "{{ server_dir }}/run"
 dsn_src_path: "{{ mqsi_workpath }}/registry/{{ broker_name }}/CurrentVersion/DSN"
 dsn_dest_path: "{{ server_dir }}/config/registry/integration_server/CurrentVersion/DSN"
 ace_command: "IntegrationServer --work-dir {{ server_dir }} --no-nodejs --start-msgflows false --mq-queue-manager-name {{ qm_name }}"
+
+---
+ 
+mqm_user: "mqm"
+mqm_group: "mqm"
+#test_script_dir: "/{{ env_name }}mqm/scripts"
+archive_path: "/{{ env_name }}mqm/recorded_messages"
+log_dir_base: "/{{ env_name }}mqm/recorded_messages/logs"
+
+#script_name: "run_all_tests.sh"
+ace_profile_path: "/opt/ace/{{ ace_version }}/server/bin/mqsiprofile"
+ace_profile: ". {{ ace_profile_path }}"
+
+# File ownership
+#file_owner: "mqm"
+#file_group: "mqm"
+
+# delete_dsn_before_start: true  # WARNING: Deletes DSN directory before starting server
+
+# Internal paths - Do not modify unless necessary
+mqsi_workpath: "/{{ env_name }}mqm/mqsidata/mqsi"
+server_dir: "{{ mqsi_workpath }}/components/{{ broker_name }}/servers/{{ eg_name }}"
+run_dir: "{{ server_dir }}/run"
+dsn_src_path: "{{ mqsi_workpath }}/registry/{{ broker_name }}/CurrentVersion/DSN"
+dsn_dest_path: "{{ server_dir }}/config/registry/integration_server/CurrentVersion/DSN"
+
+#email_recipient: "danghuy_nguyen@navyfederal.org, salem_shemondy@navyfederal.org"  # Change to your recipient emailE
+##mail Details.
+smtp_host: "smtp-out.nfcu.net"
+smtp_port: 25
+email_from: "MiddlewareWeb@navyfederal.org"
+#email_host: "smtp-out.nfcu.net"
+email_subject: "ACE tests executed - {{ ansible_date_time.date }}"
+email_body: "Please see the test results attached"
+ 

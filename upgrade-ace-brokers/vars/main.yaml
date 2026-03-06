@@ -7,11 +7,11 @@ env_name: "var"
 env_name_normalized: "{{ 'prd' if env_name in ['prda', 'prdb'] else env_name }}"
 old_ace_version: "12.0.12.22"
 new_ace_version: "13.0.6.2"
-backup_broker: true
-upgrade_brokers: true
-is_multi_instance: true
-enable_trace: true
-overwrite_existing: true
+backup_broker: "true"
+upgrade_brokers: "true"
+is_multi_instance: "true"
+enable_trace: "true"
+overwrite_existing: "true"
 
 # ACE profile paths
 old_ace_profile_path: "/opt/IBM/ace-{{ old_ace_version }}/server/bin/mqsiprofile"

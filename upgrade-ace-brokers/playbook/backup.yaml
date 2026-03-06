@@ -56,7 +56,7 @@
       - "New ACE Version     : {{ new_ace_version }}"
       - "Backup Location     : {{ backup_base_path }}"
       - "Multi Instance      : {{ is_multi_instance }}"
-      - "Active Work Path    : {{ shared_workpath if is_multi_instance else work_path }}"
+      - "Active Work Path    : {{ shared_workpath if is_multi_instance | bool else work_path }}"
       - "Overwrite Existing  : {{ overwrite_existing }}"
       - "Brokers             : {{ brokers | join(', ') }}"
       - "Timestamp           : {{ upgrade_timestamp }}"

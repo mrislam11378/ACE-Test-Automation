@@ -41,7 +41,7 @@
       ibmint extract node --backup-file "$backup_file" \
         --input-integration-node "$b" \
         --output-integration-node "$b" \
-        {% if enable_trace %}--trace "$trace_file"{% endif %} \
+        {% if enable_trace | bool %}--trace "$trace_file"{% endif %} \
         --shared-work-path {{ shared_workpath }} {{ overwrite_flag }}
     done | tee {{ backup_base_path }}/extract_{{ upgrade_timestamp }}.log
   register: extract_result

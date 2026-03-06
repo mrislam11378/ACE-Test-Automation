@@ -6,9 +6,10 @@
 - name: Set file paths
   set_fact:
     summary_file_path: "{{ log_dir_base }}/summary_{{ broker_name }}_{{ eg_name }}_{{ run_timestamp }}.csv"
-    zip_file_path: "{{ zip_dest_dir }}/GenTestRun_{{ run_timestamp }}.zip"
 
 - name: Stop Integration Server
+  become: true
+  become_user: "{{ mqm_user }}"
   shell: "{{ ace_profile }} && ibmint stop server {{ eg_name }} --integration-node {{ broker_name }}"
   register: stop_result
   failed_when: stop_result.rc != 0
@@ -18,6 +19,8 @@
     msg: "{{ stop_result.stdout_lines }}"
 
 - name: Check for DSN directory differences
+  become: true
+  become_user: "{{ mqm_user }}"
   # -n is dry run, -v is verbose, -r is recursive, -c is checksum
   shell: "rsync -rcvn --delete {{ dsn_src_path }}/ {{ dsn_dest_path }}/  || echo 'No differences found'"
   register: dsn_diff
@@ -27,13 +30,15 @@
   debug:
     msg: "{{ dsn_diff.stdout_lines }}"
 
-# - name: Create log directory
-#   file:
-#     path: "{{ log_dir_base }}"
-#     state: directory
-#     mode: '0755'
+- name: Create log directory
+  file:
+    path: "{{ log_dir_base }}"
+    state: directory
+    mode: '0755'
 
 - name: Clean log directory contents
+  become: true
+  become_user: "{{ mqm_user }}"
   shell: "rm -rf {{ log_dir_base }}/*"
   when: cleanup_log | bool
   ignore_errors: yes
@@ -44,6 +49,8 @@
     dest: "{{ summary_file_path }}"
 
 - name: Validate directories
+  become: true
+  become_user: "{{ mqm_user }}"
   shell: |
     {{ ace_profile }}
 
@@ -67,6 +74,8 @@
     msg: "{{ setup_result.stdout_lines }}"
 
 - name: Run all tests
+  become: true
+  become_user: "{{ mqm_user }}"
   shell: |
     {{ ace_profile }}
 
@@ -145,6 +154,8 @@
   when: delete_dsn_before_start | default(false)
 
 - name: Start Integration Server
+  become: true
+  become_user: "{{ mqm_user }}"
   shell: "{{ ace_profile }} && ibmint start server {{ eg_name }} --integration-node {{ broker_name }}"
   register: start_result
 
@@ -153,6 +164,8 @@
     msg: "{{ start_result.stdout_lines }}"
 
 - name: Display test summary table
+  become: true
+  become_user: "{{ mqm_user }}"
   shell: |
     echo "\nTEST SUMMARY"
     echo "================================================================================="
@@ -168,15 +181,17 @@
   when: summary_content.rc == 0
 
 - name: Create zip archive of log directory
+  become: true
+  become_user: "{{ mqm_user }}"
   archive:
     path: "{{ log_dir_base }}"
-    dest: "{{ zip_file_path }}"
+    dest: "{{ archive_path }}/{{ broker_name }}_{{ eg_name }}_{{ run_timestamp }}_archive.zip"
     format: zip
   register: zip_result
 
 - name: Display zip archive location
   debug:
-    msg: "Log directory archived to: {{ zip_file_path }}"
+    msg: "Log directory archived to: {{ archive_path }}/{{ broker_name }}_{{ eg_name }}_{{ run_timestamp }}_archive.zip"
   when: zip_result is succeeded
 
 - name: Send test results email with attachment
@@ -202,8 +217,8 @@
 
       Full test logs are attached as a zip file.
 
-      Zip file location on server: {{ zip_file_path }}
-    attach: "{{ zip_file_path }}"
+      Zip file location on server: {{ archive_path }}/{{ broker_name }}_{{ eg_name }}_{{ run_timestamp }}_archive.zip
+    attach: "{{ archive_path }}/{{ broker_name }}_{{ eg_name }}_{{ run_timestamp }}_archive.zip"
   when:
     - email_to | length > 0
     - zip_result is succeeded
@@ -212,8 +227,7 @@
 
 - name: Display email status
   debug:
-    msg: "{{ 'Email sent successfully to ' + email_to + (', CC: ' + email_cc if email_cc | length > 0 else '') if email_result is succeeded else 'Failed to send email: ' + (email_result.msg | default('Unknown error')) }}"
+    msg: "{{ 'Email sent successfully to ' + email_to if email_result is succeeded else 'Failed to send email: ' + (email_result.msg | default('Unknown error')) }}"
   when:
     - email_to | length > 0
     - email_result is defined
-
