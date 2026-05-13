@@ -1,31 +1,153 @@
-# IBM ACE Test Automation
+# IBM App Connect Test Automation
 
-Automated testing framework for IBM App Connect Enterprise (ACE).
+The testing automation framework provides comprehensive automated testing for IBM App Connect Enterprise messageflows, using generated JUnit tests from recorded messages.
 
-## Quick Start
+### Architecture
 
-```bash
-# Run all tests with log directory
-./run_all_tests.sh <BrokerName> <ExecutionGroupName> <QueueManagerName> --log-base /tmp/logs
 ```
-
-## Options
-
-| Parameter | Required | Description |
-|-----------|----------|-------------|
-| BrokerName | Yes | ACE Integration Node name |
-| ExecutionGroupName | Yes | Integration Server name |
-| QueueManagerName | Yes | MQ Queue Manager name |
-| --log-base | Yes | Directory for log files and summary |
+┌─────────────────────────────────────────────────────────┐
+│           Test Automation Workflow                      │
+├─────────────────────────────────────────────────────────┤
+│  Phase 1: Pre-Test Setup                                │
+│    ├─ Generate timestamp                                │
+│    ├─ Stop Integration Server                           │
+│    ├─ Check DSN directory differences                   │
+│    └─ Clean log directory (optional)                    │
+│                                                         │
+│  Phase 2: Test Execution                                │
+│    ├─ Validate directories exist                        │
+│    ├─ Auto-discover test projects                       │
+│    ├─ For each test project:                            │
+│    │   ├─ Execute IntegrationAPI --test-project         │
+│    │   ├─ Parse PASSED/FAILED/ABORTED/TIME              │
+│    │   ├─ Determine status (PASS/FAIL/ERROR)            │
+│    │   └─ Write to CSV summary                          │
+│    └─ Log all output to individual files                │
+│                                                         │
+│  Phase 3: Post-Test Processing                          │
+│    ├─ Start Integration Server                          │
+│    ├─ Display formatted summary table                   │
+│    ├─ Create zip archive of logs                        │
+│    └─ Send email with attachments                       │
+└─────────────────────────────────────────────────────────┘
+```
 
 ## Features
 
-- ✅ Parameter validation with usage help
+- ✅ Parameter validation
 - ✅ Runs all test projects automatically
 - ✅ File logging with command visibility
 - ✅ Timestamped CSV summaries
 - ✅ Formatted table output
 - ✅ Proper exit codes (0=success, 1=error)
+- ✅ Modular playbook structure
+- ✅ DSN directory validation
+
+## Test Generation and Automation
+
+IBM App Connect Enterprise facilitates test-driven development through its test framework, enabling rapid adoption of new product versions and architectural changes. Integration tests verify that flows operate correctly after development changes, upgrades, or modifications to external services.
+
+### Test Automation Pipeline
+
+1. **Message Capture** - Record live traffic from v12 integration brokers
+2. **Test Generation** - Generate JUnit test suites from recorded messages
+3. **Build (CI)** - Build BAR files containing test projects via GitHub Actions
+4. **Deploy (CD)** - Deploy test projects to target environments via UrbanCode Deploy
+
+### 1. Message Capture
+
+Enable message recording by configuring the `RecordedMessageManager` in `server.conf.yaml`:
+
+```yaml
+ResourceManagers:
+  RecordedMessageManager:
+    recordedMessagePath: 'C:\temp\IntegrationServer\recorded_messages'
+    recordAllMessages: true
+```
+
+**Steps:**
+1. Restart the execution group (full broker restart not recommended)
+2. Invoke the application to generate traffic
+3. Recorded messages are saved as `.mxml` files in the specified directory
+4. To stop recording, set `recordAllMessages: false` and restart
+
+### 2. Test Generation
+
+Generate JUnit tests from recorded messages using IBM App Connect Enterprise Toolkit:
+
+```bash
+ibmint generate tests \
+  --recorded-messages mmc/OndotWorkflow/ \
+  --output-test-project GeneratedTestProjects/Generated_Tests_OnDotWorkflow \
+  --java-class com.nfcu.tests
+```
+
+**Optional: Analyze Message Coverage**
+
+Use `msgindex` to identify which flow nodes were exercised by each recorded message:
+
+```bash
+ibmint generate msgindex --recorded-messages mmc/OndotWorkflow/
+```
+
+**Generated Test Project Structure:**
+```
+GeneratedTests_OndotWorkflow/
+├── .classpath
+├── .project
+├── testproject.descriptor
+└── src/main/
+    ├── java/com/nfcu/tests/
+    │   └── WholeFlow_OndorWorkflow_Tests.java
+    └── resources/
+        ├── 00006977-68DD7AF7-00000001-0.mxml
+        ├── 00006977-68DD7AF7-00000001-1.mxml
+        └── ... (additional .mxml files)
+```
+
+### 3. Continuous Integration (GitHub Actions)
+
+Test projects are committed to GitHub with a `build.xml` file. GitHub Actions:
+- Build test project BAR files using `ant` and `ibmint`
+- Place BAR files in a location accessible to UrbanCode Deploy
+- Create UrbanCode tags to trigger deployment
+
+### 4. Continuous Deployment (UrbanCode Deploy)
+
+UrbanCode Deploy:
+- Monitors for new BAR files and tags
+- Deploys test projects to target environments using `mqsideploybar`
+- Triggers Ansible test automation after deployment
+
+**Complete CI/CD Pipeline:**
+
+```
+┌─────────────────┐
+│  Developer      │
+│  Commits Code   │
+└────────┬────────┘
+         ↓
+┌─────────────────┐
+│ GitHub Actions  │
+│ Build & Package │
+└────────┬────────┘
+         ↓
+┌─────────────────┐
+│ UrbanCode Deploy│
+│ Deploy to AIX   │
+└────────┬────────┘
+         ↓
+┌─────────────────┐
+│ Ansible         │
+│ Run Tests       │
+└────────┬────────┘
+         ↓
+┌─────────────────┐
+│ Email/Splunk    │
+│ Report Results  │
+└─────────────────┘
+```
+
 
 ## Output
 
@@ -54,92 +176,50 @@ GenTest_Project1,PASS,10,0,0,5.23,/tmp/logs/GenTest_Project1.log
 GenTest_Project2,FAIL,8,2,0,4.56,/tmp/logs/GenTest_Project2.log
 ```
 
-## Example
-
-```bash
-# Run all tests
-./run_all_tests.sh MyBroker MyEG MyQM --log-base /tmp/logs
-```
-
-## Exit Codes
-
-- **0** = Tests ran successfully (check CSV for pass/fail)
-- **1** = Execution error (validation or system error)
-
 ## Ansible Usage
 
-### Configuration
+### Survey Variables
 
-Edit `ansible.yaml` or `ansible-embedded.yaml` variables:
+The following variables are coming in from the survey:
 
-**Required:**
 ```yaml
-broker_name: "TestNode"                  # ACE broker name
-eg_name: "TestServer"                    # Integration server name
-qm_name: "MYQMGR"                        # Queue manager name
-test_script_dir: "/path/to/dir"          # Script directory (ansible.yaml only)
-ace_version: "12.0.12.22"                # ACE version
-file_owner: "username"                   # File ownership user
-file_group: "groupname"                  # File ownership group
+env_name: "intg"                         # Environment name (used in paths)
+broker_name: "mmcbroker1"                # ACE Integration Node name
+eg_name: "mmc,SalesForce01"              # Integration Server name (single or comma-separated list)
+qm_name: "IVIMMC1"                       # Queue Manager name
+ace_version: "13.0.6.1"                  # ACE version
+to_emails: ""                            # Leave empty to skip email notification
+cc_emails: []                            # List of CC recipients
+cleanup_log: false                       # Clean log directory before run
 ```
 
-**Optional:**
-```yaml
-log_dir_base: "/tmp/GenTestRun"          # Log directory (default)
-delete_dsn_before_start: true            # Delete DSN before server start (WARNING)
-mqsi_workpath: "/var/mqsi"               # Custom MQSI_WORKPATH if different
-```
+### Playbook Structure
 
-**Auto-configured:**
-```yaml
-ace_profile_path: "/opt/IBM/ace-{{ ace_version }}/server/bin/mqsiprofile"
-ace_profile: "[ -f ~/.bash_profile ] && . ~/.bash_profile || . {{ ace_profile_path }}"
-# Checks .bash_profile first, falls back to ACE profile
-```
+The modular playbook structure provides better organization and reusability:
 
-### Run Playbook
-
-**Option 1: With External Script** (`ansible.yaml`)
-```bash
-# Localhost
-ansible-playbook ansible.yaml -i "localhost," -c local
-
-# Remote servers (edit hosts.ini first)
-ansible-playbook -i hosts.ini ansible.yaml
-```
-
-**Option 2: Embedded Shell Script** (`ansible-embedded.yaml`)
-```bash
-# Localhost
-ansible-playbook ansible-embedded.yaml -i "localhost," -c local
-
-# Remote servers
-ansible-playbook -i hosts.ini ansible-embedded.yaml
-```
-
-### Differences Between Playbooks
-
-| Feature | ansible.yaml | ansible-embedded.yaml |
-|---------|--------------|----------------------|
-| Script dependency | Requires `run_all_tests.sh` | Self-contained |
-| Portability | Need to distribute script | Single file |
-| Maintenance | Separate files | All in one |
-| Use case | Traditional setup | Simplified deployment |
+**Main Files:**
+- **playbook/main.yaml** - Main entry point, handles single/multiple servers
+- **playbook/run_all_tests.yaml** - Core test execution logic
+- **playbook/check_prereqs.yaml** - Prerequisite validation (checks required variables)
+- **vars/main.yaml** - Centralized configuration variables
 
 ### What It Does
 
-1. **Generates timestamp** - Creates unique timestamp for this run
-2. **Stops Integration Server** - Fails if can't stop
-3. **Checks DSN directory** - Dry-run comparison (no copy)
-4. **Sets up test environment** - Validates directories, creates summary file
-5. **Runs all tests** - Executes all test projects, logs output
-6. **Optionally deletes DSN** - If `delete_dsn_before_start: true`
-7. **Starts Integration Server** - Brings server back up
-8. **Displays formatted summary** - Shows test results in table format
+1. **Validates prerequisites** - Checks all required variables are defined (`env_name`, `mqm_user`, `mqm_group`, `broker_name`, `qm_name`, `eg_name`, `cc_emails`, `to_emails`)
+2. **Parses server list** - Splits comma-separated `eg_name` if multiple servers specified
+3. **For each server:**
+   - **Generates timestamp** - Creates unique timestamp for this run
+   - **Stops Integration Server** - Uses `become` to run as mqm user
+   - **Checks DSN directory** - Dry-run rsync comparison (no copy)
+   - **Optionally cleans logs** - If `cleanup_log: true`
+   - **Sets up test environment** - Validates directories, creates summary CSV
+   - **Runs all tests** - Executes all test projects with ODBC environment
+   - **Optionally deletes DSN** - If `delete_dsn_before_start: true`
+   - **Starts Integration Server** - Brings server back up
+   - **Creates zip archive** - Archives all logs to `archive_path`
+   - **Sends email** - Attaches summary CSV and zip file (if `to_emails` configured)
+   - **Displays formatted summary** - Shows test results in table format
 
-### DSN Directory Check
-
-The playbook uses `rsync` in dry-run mode with checksum comparison to detect differences between source and destination DSN directories. It reports what files differ but does not copy them.
 
 ### Test Output
 
@@ -150,4 +230,44 @@ Each test execution shows:
 - Test results (Pass/Fail/Abort counts)
 - Execution time
 
+**Log Files:**
+- Individual test logs: `{{ log_dir_base }}/<Test ProjectName>.log`
+- Summary CSV: `{{ log_dir_base }}/summary_<broker>_<eg>_<timestamp>.csv`
+- Archive: `{{ archive_path }}/<broker>_<eg>_<timestamp>_archive.zip`
+
+**Email Notification:**
+When `to_emails` is configured, an email is sent with:
+- DSN directory differences
+- Test summary table
+- Attached summary CSV
+- Attached zip archive of all logs
+
 Final summary displays formatted table with all results.
+
+### Multiple Server Support
+
+The `eg_name` variable supports both single and multiple Integration Servers:
+
+**Single Server:**
+```yaml
+eg_name: "TestServer"
+```
+
+**Multiple Servers (comma-separated):**
+```yaml
+eg_name: "server1,server2,server3"
+```
+
+When multiple servers are specified, the playbook runs tests on each server sequentially. Each server will:
+- Stop independently
+- Run its own tests
+- Generate separate logs and summaries (timestamped per server)
+- Start back up
+- Send separate email notifications (if configured)
+
+**Example Output Files:**
+```
+/intgmqm/recorded_messages/logs/summary_TestNode_server1_20260324_153045.csv
+/intgmqm/recorded_messages/logs/summary_TestNode_server2_20260324_153145.csv
+/intgmqm/recorded_messages/logs/summary_TestNode_server3_20260324_153245.csv
+```

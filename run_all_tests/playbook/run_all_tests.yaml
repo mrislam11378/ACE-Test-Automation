@@ -6,9 +6,11 @@
 - name: Set file paths
   set_fact:
     summary_file_path: "{{ log_dir_base }}/summary_{{ broker_name }}_{{ eg_name }}_{{ run_timestamp }}.csv"
-    zip_file_path: "{{ zip_dest_dir }}/GenTestRun_{{ run_timestamp }}.zip"
+    zip_file_path: "{{ archive_path }}/{{ broker_name }}_{{ eg_name }}_{{ run_timestamp }}_archive.zip"
 
 - name: Stop Integration Server
+  become: true
+  become_user: "{{ mqm_user }}"
   shell: "{{ ace_profile }} && ibmint stop server {{ eg_name }} --integration-node {{ broker_name }}"
   register: stop_result
   failed_when: stop_result.rc != 0
@@ -18,14 +20,17 @@
     msg: "{{ stop_result.stdout_lines }}"
 
 - name: Check for DSN directory differences
-  # -n is dry run, -v is verbose, -r is recursive, -c is checksum
-  shell: "rsync -rcvn --delete {{ dsn_src_path }}/ {{ dsn_dest_path }}/  || echo 'No differences found'"
+  become: true
+  become_user: "{{ mqm_user }}"
+  # -n is dry run, -i is itemize changes, -r is recursive, -c is checksum
+  shell: "rsync -rcin --delete {{ dsn_src_path }}/ {{ dsn_dest_path }}/ 2>&1"
   register: dsn_diff
   changed_when: false
+  failed_when: false
 
 - name: Display DSN diff output
   debug:
-    msg: "{{ dsn_diff.stdout_lines }}"
+    msg: "{{ dsn_diff.stdout_lines if dsn_diff.stdout != '' else ['No differences found'] }}"
 
 # - name: Create log directory
 #   file:
@@ -34,16 +39,22 @@
 #     mode: '0755'
 
 - name: Clean log directory contents
+  become: true
+  become_user: "{{ mqm_user }}"
   shell: "rm -rf {{ log_dir_base }}/*"
   when: cleanup_log | bool
   ignore_errors: yes
 
 - name: Create summary CSV header
+  become: true
+  become_user: "{{ mqm_user }}"
   copy:
     content: "Test Project,Status,Passed,Failed,Aborted,Time(s),Log File\n"
     dest: "{{ summary_file_path }}"
 
 - name: Validate directories
+  become: true
+  become_user: "{{ mqm_user }}"
   shell: |
     {{ ace_profile }}
 
@@ -67,6 +78,8 @@
     msg: "{{ setup_result.stdout_lines }}"
 
 - name: Run all tests
+  become: true
+  become_user: "{{ mqm_user }}"
   shell: |
     {{ ace_profile }}
 
@@ -139,12 +152,16 @@
     msg: "{{ test_results.stdout_lines }}"
 
 - name: Delete DSN directory (optional cleanup)
+  become: true
+  become_user: "{{ mqm_user }}"
   file:
     path: "{{ dsn_dest_path }}"
     state: absent
-  when: delete_dsn_before_start | default(false)
+  when: delete_dsn_before_start | default(false) | bool
 
 - name: Start Integration Server
+  become: true
+  become_user: "{{ mqm_user }}"
   shell: "{{ ace_profile }} && ibmint start server {{ eg_name }} --integration-node {{ broker_name }}"
   register: start_result
 
@@ -153,12 +170,16 @@
     msg: "{{ start_result.stdout_lines }}"
 
 - name: Display test summary table
+  become: true
+  become_user: "{{ mqm_user }}"
   shell: |
-    echo "\nTEST SUMMARY"
-    echo "================================================================================="
-    awk -F, 'BEGIN {printf "%-35s %-10s %-8s %-8s %-8s %-8s\n", "Project", "Status", "Pass", "Fail", "Abort", "Time" }
-         NR>1 {printf "%-35s %-10s %-8s %-8s %-8s %-8s\n", $1, $2, $3, $4, $5, $6}' {{ summary_file_path }}
-    echo "================================================================================="
+    echo ""
+    echo "TEST SUMMARY"
+    echo "========================================================================================================================"
+    awk -F, 'BEGIN {printf "%-50s %-12s %8s %8s %8s %10s  %-60s\n", "Test Project", "Status", "Passed", "Failed", "Aborted", "Time(s)", "Log File" }
+         BEGIN {printf "%-50s %-12s %8s %8s %8s %10s  %-60s\n", "------------", "------", "------", "------", "-------", "-------", "--------" }
+         NR>1 {printf "%-50s %-12s %8s %8s %8s %10s  %-60s\n", $1, $2, $3, $4, $5, $6, $7}' {{ summary_file_path }}
+    echo "========================================================================================================================"
   register: summary_content
   ignore_errors: yes
 
@@ -168,8 +189,10 @@
   when: summary_content.rc == 0
 
 - name: Create zip archive of log directory
-  archive:
-    path: "{{ log_dir_base }}"
+  become: true
+  become_user: "{{ mqm_user }}"
+  ansible.builtin.archive:
+    path: "{{ log_dir_base }}/*"
     dest: "{{ zip_file_path }}"
     format: zip
   register: zip_result
@@ -184,8 +207,8 @@
     host: "{{ smtp_host }}"
     port: "{{ smtp_port }}"
     from: "{{ email_from }}"
-    to: "{{ email_to }}"
-    cc: "{{ email_cc }}"
+    to: "{{ to_emails }}"
+    cc: "{{ cc_emails }}"
     subject: "ACE Test Results - {{ broker_name }}/{{ eg_name }} - {{ run_timestamp }}"
     body: |
       ACE Integration Server Test Results
@@ -203,17 +226,19 @@
       Full test logs are attached as a zip file.
 
       Zip file location on server: {{ zip_file_path }}
-    attach: "{{ zip_file_path }}"
+    attach: 
+      - "{{ summary_file_path }}"
+      - "{{ zip_file_path }}"
   when:
-    - email_to | length > 0
+    - to_emails | length > 0
     - zip_result is succeeded
   register: email_result
   ignore_errors: yes
 
 - name: Display email status
   debug:
-    msg: "{{ 'Email sent successfully to ' + email_to + (', CC: ' + email_cc if email_cc | length > 0 else '') if email_result is succeeded else 'Failed to send email: ' + (email_result.msg | default('Unknown error')) }}"
+    msg: "{{ 'Email sent successfully to ' + to_emails + (', CC: ' + cc_emails if cc_emails | length > 0 else '') if email_result is succeeded else 'Failed to send email: ' + (email_result.msg | default('Unknown error')) }}"
   when:
-    - email_to | length > 0
+    - to_emails | length > 0
     - email_result is defined
 

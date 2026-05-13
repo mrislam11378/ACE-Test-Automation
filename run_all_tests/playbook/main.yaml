@@ -1,10 +1,39 @@
 ---
+# Usage:
+#   Single server:
+#     ansible-playbook playbook/main.yaml -i hosts.ini
+#
+#   Multiple servers (comma-separated):
+#     ansible-playbook playbook/main.yaml -i hosts.ini -e "eg_name=server1,server2,server3"
+#
+#   Override other variables:
+#     ansible-playbook playbook/main.yaml -i hosts.ini -e "broker_name=MyNode" -e "eg_name=MyServer"
+#
+#   Localhost:
+#     ansible-playbook playbook/main.yaml -i "localhost," -c local
+
 - name: Run ACE test projects
   hosts: all
   vars_files:
     - ../vars/main.yaml
 
   tasks:
-    - name: Run all tests
+    - name: Check prerequisites
+      include_tasks: check_prereqs.yaml
+
+    - name: Parse eg_name list if comma-separated
+      set_fact:
+        eg_name_list: "{{ eg_name.split(',') | map('trim') | list }}"
+      when: eg_name is defined and ',' in eg_name
+
+    - name: Run tests for each server (comma-separated)
       include_tasks: run_all_tests.yaml
+      loop: "{{ eg_name_list }}"
+      vars:
+        eg_name: "{{ item }}"
+      when: eg_name_list is defined
+
+    - name: Run tests for single server
+      include_tasks: run_all_tests.yaml
+      when: eg_name_list is not defined
 

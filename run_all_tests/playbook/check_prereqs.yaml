@@ -1,0 +1,17 @@
+---
+- name: Checking for required variables needed for the play
+  delegate_to: localhost
+  ansible.builtin.fail:
+    msg: "Variable '{{ item }}' is not supplied or defined.  Role cannot continue."
+  when: vars[item] is undefined
+  loop:
+    - env_name
+    - mqm_user
+    - mqm_group
+    - broker_name
+    - qm_name
+    - eg_name
+    - cc_emails
+    - to_emails
+  run_once: true
+ 
